@@ -400,14 +400,14 @@ private struct PhotoThumbnailCell: View {
 
     var body: some View {
         Button { loadFullImage() } label: {
-            ZStack {
-                Color.gray.opacity(0.2)
-                if let thumbnail {
-                    Image(uiImage: thumbnail).resizable().scaledToFill()
+            Color.gray.opacity(0.2)
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    if let thumbnail {
+                        Image(uiImage: thumbnail).resizable().scaledToFill()
+                    }
                 }
-            }
-            .aspectRatio(1, contentMode: .fit)
-            .clipped()
+                .clipped()
         }
         .buttonStyle(.plain)
         .onAppear { loadThumbnail() }
