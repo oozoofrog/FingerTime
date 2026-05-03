@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct NASASpaceBackground: Identifiable, Equatable {
+struct NASASpaceBackground: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
     let credit: String
@@ -101,12 +101,12 @@ extension NASASpaceBackground {
 struct SpaceBackgroundRotator: Equatable {
     private let backgrounds: [NASASpaceBackground]
     private(set) var currentIndex: Int
-    private var lastHourMarker: Int
+    private var lastHour: Int
 
     init(backgrounds: [NASASpaceBackground] = NASASpaceBackground.curated, initialTime: ClockTime) {
         self.backgrounds = backgrounds.isEmpty ? NASASpaceBackground.curated : backgrounds
         currentIndex = 0
-        lastHourMarker = initialTime.hourMarker
+        lastHour = initialTime.hour
     }
 
     var current: NASASpaceBackground {
@@ -114,10 +114,12 @@ struct SpaceBackgroundRotator: Equatable {
     }
 
     mutating func update(for time: ClockTime) {
-        guard time.hourMarker != lastHourMarker else {
-            return
-        }
-        lastHourMarker = time.hourMarker
-        currentIndex = (currentIndex + 1) % backgrounds.count
+        let newHour = time.hour
+        guard newHour != lastHour else { return }
+        let forward = (newHour - lastHour + 24) % 24
+        let steps = forward <= 12 ? forward : forward - 24
+        lastHour = newHour
+        let count = backgrounds.count
+        currentIndex = ((currentIndex + steps) % count + count) % count
     }
 }

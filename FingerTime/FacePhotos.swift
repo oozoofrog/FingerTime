@@ -5,9 +5,9 @@
 //  Created by Codex on 5/3/26.
 //
 
-import Combine
 import SwiftUI
 import UIKit
+import Vision
 
 enum PhotoSlot: String, CaseIterable, Identifiable {
     case center
@@ -50,36 +50,61 @@ enum PhotoSlot: String, CaseIterable, Identifiable {
     }
 }
 
-@MainActor
-final class FacePhotoStore: ObservableObject {
-    @Published private(set) var images: [PhotoSlot: UIImage] = [:]
+@MainActor @Observable
+final class FacePhotoStore {
+    private(set) var images: [PhotoSlot: UIImage] = [:]
 
     private let directory: URL
 
     init(fileManager: FileManager = .default) {
         let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
         directory = documents?.appendingPathComponent("FacePhotos", isDirectory: true) ?? fileManager.temporaryDirectory
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        PhotoFlowDebug.info("FacePhotoStore init directory=\(self.directory.path)")
+        do {
+            try fileManager.createDirectory(at: self.directory, withIntermediateDirectories: true)
+            PhotoFlowDebug.info("FacePhotoStore directory ready")
+        } catch {
+            PhotoFlowDebug.error("FacePhotoStore directory create failed error=\(error.localizedDescription)")
+        }
         loadSavedImages()
     }
 
     func image(for slot: PhotoSlot) -> UIImage? {
-        images[slot]
+        PhotoFlowDebug.debug("FacePhotoStore image lookup slot=\(slot.rawValue) hit=\(self.images[slot] != nil)")
+        return images[slot]
     }
 
     func save(_ image: UIImage, for slot: PhotoSlot) {
-        let croppedImage = centerCroppedSquare(image)
-        images[slot] = croppedImage
+        PhotoFlowDebug.info("FacePhotoStore save requested slot=\(slot.rawValue) sourceSize=\(String(describing: image.size))")
+        let croppedImage: UIImage
+        if let faceCenter = detectFaceCenter(in: image) {
+            PhotoFlowDebug.info("FacePhotoStore face detected at (\(faceCenter.x), \(faceCenter.y)) slot=\(slot.rawValue)")
+            croppedImage = faceCroppedSquare(image, faceCenter: faceCenter)
+        } else {
+            croppedImage = centerCroppedSquare(image)
+        }
         guard let data = croppedImage.jpegData(compressionQuality: 0.82) else {
+            PhotoFlowDebug.error("FacePhotoStore jpeg encoding failed slot=\(slot.rawValue)")
             return
         }
-        try? data.write(to: fileURL(for: slot), options: [.atomic])
+        let destination = fileURL(for: slot)
+        do {
+            try data.write(to: destination, options: [.atomic])
+            PhotoFlowDebug.info("FacePhotoStore save succeeded slot=\(slot.rawValue) bytes=\(data.count) path=\(destination.path)")
+        } catch {
+            PhotoFlowDebug.error("FacePhotoStore save failed slot=\(slot.rawValue) error=\(error.localizedDescription)")
+        }
+        images[slot] = croppedImage
     }
 
     private func loadSavedImages() {
         for slot in PhotoSlot.allCases {
-            if let image = UIImage(contentsOfFile: fileURL(for: slot).path) {
+            let path = fileURL(for: slot).path
+            if let image = UIImage(contentsOfFile: path) {
                 images[slot] = image
+                PhotoFlowDebug.info("FacePhotoStore loaded saved image slot=\(slot.rawValue) path=\(path)")
+            } else {
+                PhotoFlowDebug.info("FacePhotoStore no saved image slot=\(slot.rawValue) path=\(path)")
             }
         }
     }
@@ -88,8 +113,50 @@ final class FacePhotoStore: ObservableObject {
         directory.appendingPathComponent(slot.fileName)
     }
 
+    private func detectFaceCenter(in image: UIImage) -> CGPoint? {
+        guard let ciImage = CIImage(image: image) else { return nil }
+        let request = VNDetectFaceRectanglesRequest()
+        let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            PhotoFlowDebug.error("FacePhotoStore face detection failed: \(error.localizedDescription)")
+            return nil
+        }
+        guard let face = request.results?
+            .max(by: { $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height })
+        else { return nil }
+
+        let box = face.boundingBox
+        return CGPoint(
+            x: box.midX * image.size.width,
+            y: (1 - box.midY) * image.size.height
+        )
+    }
+
+    private func faceCroppedSquare(_ image: UIImage, faceCenter: CGPoint, side: CGFloat = 512) -> UIImage {
+        guard image.size.width > 0, image.size.height > 0 else { return image }
+
+        let scale = max(side / image.size.width, side / image.size.height)
+        let scaledSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let drawX = min(0, max(side - scaledSize.width, side / 2 - faceCenter.x * scale))
+        let drawY = min(0, max(side - scaledSize.height, side / 2 - faceCenter.y * scale))
+        let drawRect = CGRect(x: drawX, y: drawY, width: scaledSize.width, height: scaledSize.height)
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { context in
+            UIColor.black.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+            image.draw(in: drawRect)
+        }
+    }
+
     private func centerCroppedSquare(_ image: UIImage, side: CGFloat = 512) -> UIImage {
         guard image.size.width > 0, image.size.height > 0 else {
+            PhotoFlowDebug.error("FacePhotoStore crop skipped invalid size=\(String(describing: image.size))")
             return image
         }
 
@@ -120,7 +187,10 @@ struct FacePhotoButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            PhotoFlowDebug.info("FacePhotoButton tapped slot=\(slot.rawValue) hasImage=\(image != nil) size=\(size)")
+            action()
+        } label: {
             ZStack {
                 Circle()
                     .fill(.ultraThinMaterial)
@@ -158,6 +228,7 @@ struct CameraImagePicker: UIViewControllerRepresentable {
     @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
+        PhotoFlowDebug.info("CameraImagePicker makeUIViewController")
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         picker.allowsEditing = false
@@ -165,13 +236,16 @@ struct CameraImagePicker: UIViewControllerRepresentable {
         return picker
     }
 
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
+        PhotoFlowDebug.debug("CameraImagePicker updateUIViewController")
     }
 
-    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+    func makeCoordinator() -> Coordinator {
+        PhotoFlowDebug.info("CameraImagePicker makeCoordinator")
+        return Coordinator(parent: self)
+    }
+
+    @MainActor final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
         private let parent: CameraImagePicker
 
         init(parent: CameraImagePicker) {
@@ -179,13 +253,19 @@ struct CameraImagePicker: UIViewControllerRepresentable {
         }
 
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            PhotoFlowDebug.info("CameraImagePicker didFinishPickingMedia keys=\(info.keys.map { $0.rawValue }.joined(separator: ","))")
             if let image = info[.originalImage] as? UIImage {
+                PhotoFlowDebug.info("CameraImagePicker original image received size=\(String(describing: image.size))")
                 parent.onImagePicked(image)
+            } else {
+                PhotoFlowDebug.error("CameraImagePicker original image missing")
             }
             parent.dismiss()
+            PhotoFlowDebug.info("CameraImagePicker dismissed after pick")
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            PhotoFlowDebug.info("CameraImagePicker cancelled")
             parent.dismiss()
         }
     }

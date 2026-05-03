@@ -8,10 +8,9 @@
 import PhotosUI
 import SwiftUI
 import UIKit
-
 struct ContentView: View {
-    @StateObject private var clockModel = ClockTimeModel()
-    @StateObject private var photoStore = FacePhotoStore()
+    @State private var clockModel = ClockTimeModel()
+    @State private var photoStore = FacePhotoStore()
 
     @State private var sourceDialogSlot: PhotoSlot?
     @State private var pendingPhotoSlot: PhotoSlot?
@@ -44,6 +43,7 @@ struct ContentView: View {
                         clockModel.applyDragDelta(delta, to: hand)
                     },
                     onPhotoTap: { slot in
+                        PhotoFlowDebug.info("ContentView.onPhotoTap received slot=\(slot.rawValue)")
                         sourceDialogSlot = slot
                     }
                 )
@@ -63,6 +63,9 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            PhotoFlowDebug.info("ContentView appeared")
+        }
         .task {
             while !Task.isCancelled {
                 await MainActor.run {
@@ -73,27 +76,16 @@ struct ContentView: View {
         }
         .confirmationDialog(
             "얼굴 사진 선택",
-            isPresented: Binding(
-                get: { sourceDialogSlot != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        sourceDialogSlot = nil
-                    }
-                }
-            ),
+            isPresented: sourceDialogBinding,
             presenting: sourceDialogSlot
         ) { slot in
             Button("사진 보관함에서 선택") {
-                pendingPhotoSlot = slot
-                sourceDialogSlot = nil
-                isShowingPhotoPicker = true
+                presentPhotoPicker(for: slot)
             }
 
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button("카메라로 찍기") {
-                    pendingPhotoSlot = slot
-                    sourceDialogSlot = nil
-                    isShowingCamera = true
+                    presentCamera(for: slot)
                 }
             } else {
                 Button("카메라 사용 불가") {}
@@ -105,31 +97,141 @@ struct ContentView: View {
             Text("\(slot.label) 위치에 넣을 사진을 선택하세요.")
         }
         .photosPicker(isPresented: $isShowingPhotoPicker, selection: $selectedPhotoItem, matching: .images)
+        .onChange(of: sourceDialogSlot) { _, newSlot in
+            logSourceDialogSlotChange(newSlot)
+        }
+        .onChange(of: pendingPhotoSlot) { _, newSlot in
+            logPendingPhotoSlotChange(newSlot)
+        }
+        .onChange(of: isShowingPhotoPicker) { _, isShowing in
+            logPhotoPickerPresentationChange(isShowing)
+        }
+        .onChange(of: isShowingCamera) { _, isShowing in
+            logCameraPresentationChange(isShowing)
+        }
         .onChange(of: selectedPhotoItem) { _, newItem in
-            guard let newItem, let pendingPhotoSlot else {
-                return
-            }
-            Task {
-                if let data = try? await newItem.loadTransferable(type: Data.self),
-                   let image = UIImage(data: data) {
-                    await MainActor.run {
-                        photoStore.save(image, for: pendingPhotoSlot)
-                        self.pendingPhotoSlot = nil
-                        selectedPhotoItem = nil
-                    }
-                }
-            }
+            handleSelectedPhotoItemChange(newItem)
         }
         .sheet(isPresented: $isShowingCamera) {
-            CameraImagePicker { image in
-                guard let pendingPhotoSlot else {
-                    return
-                }
-                photoStore.save(image, for: pendingPhotoSlot)
-                self.pendingPhotoSlot = nil
-            }
+            CameraImagePicker(onImagePicked: handleCameraImagePicked)
             .ignoresSafeArea()
+            .onAppear(perform: logCameraSheetAppeared)
         }
+    }
+
+    private var sourceDialogBinding: Binding<Bool> {
+        Binding(
+            get: { sourceDialogSlot != nil },
+            set: { isPresented in
+                let slotName = sourceDialogSlot?.rawValue ?? "nil"
+                PhotoFlowDebug.info("confirmationDialog binding set isPresented=\(isPresented) sourceSlot=\(slotName)")
+                if !isPresented {
+                    sourceDialogSlot = nil
+                }
+            }
+        )
+    }
+
+    private func presentPhotoPicker(for slot: PhotoSlot) {
+        PhotoFlowDebug.info("presentPhotoPicker requested slot=\(slot.rawValue)")
+        pendingPhotoSlot = slot
+        selectedPhotoItem = nil
+        sourceDialogSlot = nil
+
+        Task { @MainActor in
+            PhotoFlowDebug.info("presentPhotoPicker waiting for dialog dismissal slot=\(slot.rawValue)")
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            PhotoFlowDebug.info("presentPhotoPicker toggling picker true slot=\(slot.rawValue)")
+            isShowingPhotoPicker = true
+        }
+    }
+
+    private func presentCamera(for slot: PhotoSlot) {
+        PhotoFlowDebug.info("presentCamera requested slot=\(slot.rawValue)")
+        pendingPhotoSlot = slot
+        sourceDialogSlot = nil
+
+        Task { @MainActor in
+            PhotoFlowDebug.info("presentCamera waiting for dialog dismissal slot=\(slot.rawValue)")
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            PhotoFlowDebug.info("presentCamera toggling camera true slot=\(slot.rawValue)")
+            isShowingCamera = true
+        }
+    }
+
+    private func handleSelectedPhotoItemChange(_ newItem: PhotosPickerItem?) {
+        let hasItem = newItem != nil
+        let slotName = pendingPhotoSlot?.rawValue ?? "nil"
+        PhotoFlowDebug.info("selectedPhotoItem changed hasItem=\(hasItem) pendingSlot=\(slotName)")
+        guard let newItem, let pendingPhotoSlot else {
+            PhotoFlowDebug.info("selectedPhotoItem ignored because item or pending slot is nil")
+            return
+        }
+
+        Task {
+            await loadSelectedPhotoItem(newItem, for: pendingPhotoSlot)
+        }
+    }
+
+    private func loadSelectedPhotoItem(_ item: PhotosPickerItem, for slot: PhotoSlot) async {
+        PhotoFlowDebug.info("PhotosPicker loadTransferable started slot=\(slot.rawValue)")
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                PhotoFlowDebug.error("PhotosPicker loadTransferable returned nil slot=\(slot.rawValue)")
+                return
+            }
+            PhotoFlowDebug.info("PhotosPicker data loaded bytes=\(data.count) slot=\(slot.rawValue)")
+
+            guard let image = UIImage(data: data) else {
+                PhotoFlowDebug.error("PhotosPicker UIImage decode failed slot=\(slot.rawValue)")
+                return
+            }
+            PhotoFlowDebug.info("PhotosPicker UIImage decoded size=\(String(describing: image.size)) slot=\(slot.rawValue)")
+
+            await MainActor.run {
+                PhotoFlowDebug.info("PhotosPicker saving image slot=\(slot.rawValue)")
+                photoStore.save(image, for: slot)
+                self.pendingPhotoSlot = nil
+                selectedPhotoItem = nil
+                PhotoFlowDebug.info("PhotosPicker save flow completed")
+            }
+        } catch {
+            PhotoFlowDebug.error("PhotosPicker load failed error=\(error.localizedDescription) slot=\(slot.rawValue)")
+        }
+    }
+
+    private func handleCameraImagePicked(_ image: UIImage) {
+        guard let pendingPhotoSlot else {
+            PhotoFlowDebug.error("Camera callback ignored because pendingPhotoSlot is nil")
+            return
+        }
+        PhotoFlowDebug.info("Camera callback received image size=\(String(describing: image.size)) slot=\(pendingPhotoSlot.rawValue)")
+        photoStore.save(image, for: pendingPhotoSlot)
+        self.pendingPhotoSlot = nil
+        PhotoFlowDebug.info("Camera save flow completed")
+    }
+
+    private func logSourceDialogSlotChange(_ slot: PhotoSlot?) {
+        let slotName = slot?.rawValue ?? "nil"
+        PhotoFlowDebug.info("sourceDialogSlot changed to \(slotName)")
+    }
+
+    private func logPendingPhotoSlotChange(_ slot: PhotoSlot?) {
+        let slotName = slot?.rawValue ?? "nil"
+        PhotoFlowDebug.info("pendingPhotoSlot changed to \(slotName)")
+    }
+
+    private func logPhotoPickerPresentationChange(_ isShowing: Bool) {
+        PhotoFlowDebug.info("isShowingPhotoPicker changed to \(isShowing)")
+    }
+
+    private func logCameraPresentationChange(_ isShowing: Bool) {
+        PhotoFlowDebug.info("isShowingCamera changed to \(isShowing)")
+    }
+
+    private func logCameraSheetAppeared() {
+        let slotName = pendingPhotoSlot?.rawValue ?? "nil"
+        PhotoFlowDebug.info("Camera sheet appeared pendingSlot=\(slotName)")
     }
 
     private var topTitle: some View {
@@ -261,7 +363,7 @@ private struct DeepSpaceFallback: View {
 }
 
 private struct ClockFaceView: View {
-    @ObservedObject var photoStore: FacePhotoStore
+    var photoStore: FacePhotoStore
 
     let time: ClockTime
     let diameter: CGFloat
@@ -338,8 +440,8 @@ private struct ClockFaceView: View {
             )
         }
         .frame(width: diameter, height: diameter)
-        .coordinateSpace(name: "clockFace")
-        .gesture(
+        .coordinateSpace(.named("clockFace"))
+        .simultaneousGesture(
             DragGesture(minimumDistance: 8, coordinateSpace: .named("clockFace"))
                 .onChanged { value in
                     handleDrag(location: value.location, size: CGSize(width: diameter, height: diameter), angles: angles)
@@ -454,7 +556,7 @@ private struct ClockHandLayer: View {
     let color: Color
     let glow: Color
     let slot: PhotoSlot
-    @ObservedObject var photoStore: FacePhotoStore
+    var photoStore: FacePhotoStore
     let photoSize: CGFloat
     let onPhotoTap: (PhotoSlot) -> Void
 

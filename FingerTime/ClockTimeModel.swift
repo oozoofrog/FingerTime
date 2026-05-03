@@ -5,14 +5,27 @@
 //  Created by Codex on 5/3/26.
 //
 
-import Combine
 import Foundation
+import Observation
 
-@MainActor
-final class ClockTimeModel: ObservableObject {
-    @Published private(set) var displayedTime: ClockTime
-    @Published var isFreePlayMode = false
-    @Published private(set) var backgroundRotator: SpaceBackgroundRotator
+@MainActor @Observable
+final class ClockTimeModel {
+    private(set) var displayedTime: ClockTime
+    var isFreePlayMode = false {
+        didSet {
+            guard oldValue != isFreePlayMode else {
+                return
+            }
+
+            manualAnchor = nil
+            if isFreePlayMode {
+                let twelveOClock = ClockTime(hour: 0, minute: 0, second: 0)
+                displayedTime = twelveOClock
+                backgroundRotator.update(for: twelveOClock)
+            }
+        }
+    }
+    private(set) var backgroundRotator: SpaceBackgroundRotator
 
     private let autoReturnDelay: TimeInterval
     private let calendar: Calendar
@@ -41,10 +54,14 @@ final class ClockTimeModel: ObservableObject {
     }
 
     func tick(now: Date = Date()) {
+        guard !isFreePlayMode else {
+            return
+        }
+
         let nextTime: ClockTime
         if let manualAnchor {
             let elapsed = now.timeIntervalSince(manualAnchor.date)
-            if !isFreePlayMode && elapsed >= autoReturnDelay {
+            if elapsed >= autoReturnDelay {
                 self.manualAnchor = nil
                 nextTime = ClockTime(date: now, calendar: calendar)
             } else {
@@ -61,7 +78,7 @@ final class ClockTimeModel: ObservableObject {
     func applyDragDelta(_ deltaDegrees: Double, to hand: ClockHand, now: Date = Date()) {
         let nextTime = ClockTimeMath.applyingDragDelta(deltaDegrees, to: hand, current: displayedTime)
         displayedTime = nextTime
-        manualAnchor = (nextTime, now)
+        manualAnchor = isFreePlayMode ? nil : (nextTime, now)
         backgroundRotator.update(for: nextTime)
     }
 }

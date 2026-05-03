@@ -53,8 +53,24 @@ struct FingerTimeTests {
         #expect(rotator.current.title == "Two")
     }
 
+    @Test func backgroundAdvancesProportionallyForMultiHourJump() {
+        let backgrounds = [
+            NASASpaceBackground(title: "A", credit: "NASA", url: URL(string: "https://example.com/a.jpg")!),
+            NASASpaceBackground(title: "B", credit: "NASA", url: URL(string: "https://example.com/b.jpg")!),
+            NASASpaceBackground(title: "C", credit: "NASA", url: URL(string: "https://example.com/c.jpg")!),
+            NASASpaceBackground(title: "D", credit: "NASA", url: URL(string: "https://example.com/d.jpg")!)
+        ]
+        var rotator = SpaceBackgroundRotator(backgrounds: backgrounds, initialTime: ClockTime(hour: 1, minute: 0, second: 0))
+
+        rotator.update(for: ClockTime(hour: 4, minute: 0, second: 0))
+        #expect(rotator.currentIndex == 3)
+
+        rotator.update(for: ClockTime(hour: 2, minute: 0, second: 0))
+        #expect(rotator.currentIndex == 1)
+    }
+
     @MainActor
-    @Test func manualTimeReturnsToRealTimeAfterDelayUnlessFreePlayModeIsEnabled() {
+    @Test func manualTimeReturnsToRealTimeAfterDelay() {
         let base = Date(timeIntervalSince1970: 0)
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -73,11 +89,41 @@ struct FingerTimeTests {
         model.tick(now: base.addingTimeInterval(61))
 
         #expect(model.displayedTime.hour == ClockTime(date: base.addingTimeInterval(61), calendar: calendar).hour)
+    }
 
-        model.applyDragDelta(360, to: .minute, now: base)
+    @MainActor
+    @Test func enteringFreePlayModeResetsToStoppedTwelveOClock() {
+        let base = Date(timeIntervalSince1970: 3 * 3_600 + 15 * 60 + 30)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let model = ClockTimeModel(
+            now: base,
+            calendar: calendar,
+            shuffleBackgrounds: false
+        )
+
         model.isFreePlayMode = true
-        model.tick(now: base.addingTimeInterval(61))
+        model.tick(now: base.addingTimeInterval(42))
 
-        #expect(model.displayedTime.hour == 1)
+        #expect(model.displayedTime.secondsSinceMidnight == 0)
+        #expect(ClockTimeMath.angles(for: model.displayedTime) == ClockAngles(hour: 0, minute: 0, second: 0))
+    }
+
+    @MainActor
+    @Test func freePlayDragChangesTimeWithoutAutoTicking() {
+        let base = Date(timeIntervalSince1970: 0)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let model = ClockTimeModel(
+            now: base,
+            calendar: calendar,
+            shuffleBackgrounds: false
+        )
+
+        model.isFreePlayMode = true
+        model.applyDragDelta(360, to: .minute, now: base)
+        model.tick(now: base.addingTimeInterval(30))
+
+        #expect(model.displayedTime.secondsSinceMidnight == 3_600)
     }
 }

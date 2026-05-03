@@ -14,7 +14,7 @@ enum ClockHand: CaseIterable {
     case second
 }
 
-struct ClockAngles: Equatable {
+struct ClockAngles: Equatable, Sendable {
     let hour: Double
     let minute: Double
     let second: Double
@@ -51,10 +51,6 @@ struct ClockTime: Equatable, Sendable {
 
     var second: Int {
         Int(secondsSinceMidnight) % 60
-    }
-
-    var hourMarker: Int {
-        Int(secondsSinceMidnight / 3_600)
     }
 
     func adding(seconds: TimeInterval) -> ClockTime {

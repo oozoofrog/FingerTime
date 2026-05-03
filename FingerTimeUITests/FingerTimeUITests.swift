@@ -34,6 +34,23 @@ final class FingerTimeUITests: XCTestCase {
     }
 
     @MainActor
+    func testCenterFacePhotoDialogOpens() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let centerPhotoButton = app.buttons["중앙 얼굴 사진 선택"]
+        XCTAssertTrue(centerPhotoButton.waitForExistence(timeout: 8), "중앙 얼굴 사진 버튼이 보여야 합니다.")
+        centerPhotoButton.tap()
+
+        let photoLibraryButton = app.buttons["사진 보관함에서 선택"]
+        XCTAssertTrue(photoLibraryButton.waitForExistence(timeout: 5), "사진 선택 액션 시트가 떠야 합니다.")
+        XCTAssertTrue(
+            app.buttons["카메라로 찍기"].exists || app.buttons["카메라 사용 불가"].exists,
+            "카메라 선택지 또는 사용 불가 선택지가 함께 보여야 합니다."
+        )
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
