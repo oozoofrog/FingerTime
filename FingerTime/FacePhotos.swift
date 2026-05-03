@@ -335,7 +335,11 @@ private struct AlbumRow: View {
     }
 
     private func loadCover() {
-        guard let asset = album.coverAsset else { return }
+        guard cover == nil, let asset = album.coverAsset else { return }
+        if let cached = PhotoThumbnailCache.shared.image(for: asset.localIdentifier) {
+            cover = cached
+            return
+        }
         let opts = PHImageRequestOptions()
         opts.deliveryMode = .fastFormat
         opts.resizeMode = .fast
@@ -345,6 +349,7 @@ private struct AlbumRow: View {
             contentMode: .aspectFill, options: opts
         ) { image, _ in
             guard let image else { return }
+            PhotoThumbnailCache.shared.store(image, for: asset.localIdentifier)
             Task { @MainActor in cover = image }
         }
     }
@@ -391,6 +396,7 @@ private struct PhotoThumbnailCell: View {
     let onSelect: (UIImage) -> Void
 
     @State private var thumbnail: UIImage?
+    @State private var requestID: PHImageRequestID?
 
     var body: some View {
         Button { loadFullImage() } label: {
@@ -405,20 +411,35 @@ private struct PhotoThumbnailCell: View {
         }
         .buttonStyle(.plain)
         .onAppear { loadThumbnail() }
+        .onDisappear { cancelThumbnail() }
     }
 
     private func loadThumbnail() {
+        if let cached = PhotoThumbnailCache.shared.image(for: asset.localIdentifier) {
+            thumbnail = cached
+            return
+        }
         let opts = PHImageRequestOptions()
-        opts.deliveryMode = .opportunistic
+        opts.deliveryMode = .fastFormat
         opts.resizeMode = .fast
         opts.isNetworkAccessAllowed = false
-        PHImageManager.default().requestImage(
+        requestID = PHImageManager.default().requestImage(
             for: asset, targetSize: CGSize(width: 220, height: 220),
             contentMode: .aspectFill, options: opts
         ) { image, _ in
             guard let image else { return }
-            Task { @MainActor in thumbnail = image }
+            PhotoThumbnailCache.shared.store(image, for: asset.localIdentifier)
+            Task { @MainActor in
+                thumbnail = image
+                requestID = nil
+            }
         }
+    }
+
+    private func cancelThumbnail() {
+        guard let id = requestID else { return }
+        PHImageManager.default().cancelImageRequest(id)
+        requestID = nil
     }
 
     private func loadFullImage() {
@@ -433,6 +454,17 @@ private struct PhotoThumbnailCell: View {
             Task { @MainActor in onSelect(image) }
         }
     }
+}
+
+// MARK: - Thumbnail Cache
+
+private final class PhotoThumbnailCache {
+    static let shared = PhotoThumbnailCache()
+    private let cache = NSCache<NSString, UIImage>()
+    private init() { cache.countLimit = 300 }
+
+    func image(for id: String) -> UIImage? { cache.object(forKey: id as NSString) }
+    func store(_ image: UIImage, for id: String) { cache.setObject(image, forKey: id as NSString) }
 }
 
 // MARK: - Camera Picker
