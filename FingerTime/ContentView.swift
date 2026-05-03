@@ -91,12 +91,6 @@ struct ContentView: View {
         .onAppear {
             PhotoFlowDebug.info("ContentView appeared")
         }
-        .task {
-            while !Task.isCancelled {
-                clockModel.tick()
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }
-        }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .sourceDialog(let slot):

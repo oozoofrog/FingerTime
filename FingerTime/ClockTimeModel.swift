@@ -25,6 +25,7 @@ final class ClockTimeModel {
 
     // Not observable: struct mutations happen on every tick() but only currentBackground notifies
     @ObservationIgnored private var backgroundRotator: SpaceBackgroundRotator
+    @ObservationIgnored private var tickTask: Task<Void, Never>?
 
     private let autoReturnDelay: TimeInterval
     private let calendar: Calendar
@@ -46,6 +47,16 @@ final class ClockTimeModel {
             initialTime: initialTime
         )
         currentBackground = backgroundRotator.current
+        tickTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.tick()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    deinit {
+        tickTask?.cancel()
     }
 
     /// Pure time computation — no side effects. Called from TimelineView content on each frame.
