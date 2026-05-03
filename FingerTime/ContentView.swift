@@ -523,48 +523,20 @@ private struct ClockFaceView: View {
         ZStack {
             ClockStaticFace(diameter: diameter).equatable()
 
-            ClockHandLayer(
-                angle: angles.hour,
-                length: handLength * 0.68,
-                width: diameter * 0.026,
-                color: .purple,
-                glow: .purple,
-                slot: .hourHandTip,
-                photoStore: photoStore,
-                photoSize: diameter * 0.092,
-                onPhotoTap: onPhotoTap
-            )
+            ClockHandStick(angle: angles.hour, length: handLength * 0.68, width: diameter * 0.026, color: .purple, glow: .purple)
+            ClockHandStick(angle: angles.minute, length: handLength * 0.96, width: diameter * 0.017, color: .cyan, glow: .cyan)
+            ClockHandStick(angle: angles.second, length: handLength * 1.08, width: diameter * 0.007, color: .orange, glow: .orange)
 
-            ClockHandLayer(
-                angle: angles.minute,
-                length: handLength * 0.96,
-                width: diameter * 0.017,
-                color: .cyan,
-                glow: .cyan,
-                slot: .minuteHandTip,
-                photoStore: photoStore,
-                photoSize: diameter * 0.088,
-                onPhotoTap: onPhotoTap
-            )
+            FacePhotoButton(slot: .hourHandTip, image: photoStore.image(for: .hourHandTip), size: diameter * 0.092, action: { onPhotoTap(.hourHandTip) })
+                .offset(handTipOffset(degrees: angles.hour, length: handLength * 0.68))
 
-            ClockHandLayer(
-                angle: angles.second,
-                length: handLength * 1.08,
-                width: diameter * 0.007,
-                color: .orange,
-                glow: .orange,
-                slot: .secondHandTip,
-                photoStore: photoStore,
-                photoSize: diameter * 0.074,
-                onPhotoTap: onPhotoTap
-            )
+            FacePhotoButton(slot: .minuteHandTip, image: photoStore.image(for: .minuteHandTip), size: diameter * 0.088, action: { onPhotoTap(.minuteHandTip) })
+                .offset(handTipOffset(degrees: angles.minute, length: handLength * 0.96))
 
-            FacePhotoButton(
-                slot: .center,
-                image: photoStore.image(for: .center),
-                size: diameter * 0.115,
-                action: { onPhotoTap(.center) }
-            )
+            FacePhotoButton(slot: .secondHandTip, image: photoStore.image(for: .secondHandTip), size: diameter * 0.074, action: { onPhotoTap(.secondHandTip) })
+                .offset(handTipOffset(degrees: angles.second, length: handLength * 1.08))
+
+            FacePhotoButton(slot: .center, image: photoStore.image(for: .center), size: diameter * 0.115, action: { onPhotoTap(.center) })
         }
         .frame(width: diameter, height: diameter)
         .coordinateSpace(.named("clockFace"))
@@ -579,6 +551,11 @@ private struct ClockFaceView: View {
                 }
         )
         .shadow(color: .cyan.opacity(0.22), radius: 40)
+    }
+
+    private func handTipOffset(degrees: Double, length: CGFloat) -> CGSize {
+        let rad = degrees * .pi / 180
+        return CGSize(width: length * sin(rad), height: -length * cos(rad))
     }
 
     private func handleDrag(location: CGPoint, size: CGSize, angles: ClockAngles) {
@@ -700,40 +677,26 @@ private struct ClockStaticFace: View, Equatable {
     }
 }
 
-private struct ClockHandLayer: View {
+private struct ClockHandStick: View {
     let angle: Double
     let length: CGFloat
     let width: CGFloat
     let color: Color
     let glow: Color
-    let slot: PhotoSlot
-    var photoStore: FacePhotoStore
-    let photoSize: CGFloat
-    let onPhotoTap: (PhotoSlot) -> Void
 
     var body: some View {
-        ZStack {
-            Capsule()
-                .fill(
-                    LinearGradient(
-                        colors: [.white.opacity(0.95), color],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+        Capsule()
+            .fill(
+                LinearGradient(
+                    colors: [.white.opacity(0.95), color],
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
-                .frame(width: max(width, 3), height: length)
-                .offset(y: -length / 2)
-                .shadow(color: glow.opacity(0.9), radius: 14)
-
-            FacePhotoButton(
-                slot: slot,
-                image: photoStore.image(for: slot),
-                size: photoSize,
-                action: { onPhotoTap(slot) }
             )
-            .offset(y: -length)
-        }
-        .rotationEffect(.degrees(angle))
+            .frame(width: max(width, 3), height: length)
+            .offset(y: -length / 2)
+            .shadow(color: glow.opacity(0.9), radius: 14)
+            .rotationEffect(.degrees(angle))
     }
 }
 
