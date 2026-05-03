@@ -8,6 +8,7 @@
 import SwiftUI
 import UIKit
 import Vision
+import Photos
 
 enum PhotoSlot: String, CaseIterable, Identifiable {
     case center
@@ -15,45 +16,32 @@ enum PhotoSlot: String, CaseIterable, Identifiable {
     case minuteHandTip
     case secondHandTip
 
-    var id: String {
-        rawValue
-    }
+    var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .center:
-            "중앙"
-        case .hourHandTip:
-            "시침"
-        case .minuteHandTip:
-            "분침"
-        case .secondHandTip:
-            "초침"
+        case .center: "중앙"
+        case .hourHandTip: "시침"
+        case .minuteHandTip: "분침"
+        case .secondHandTip: "초침"
         }
     }
 
     var placeholder: String {
         switch self {
-        case .center:
-            "🧒"
-        case .hourHandTip:
-            "👨"
-        case .minuteHandTip:
-            "👩"
-        case .secondHandTip:
-            "⭐️"
+        case .center: "🧒"
+        case .hourHandTip: "👨"
+        case .minuteHandTip: "👩"
+        case .secondHandTip: "⭐️"
         }
     }
 
-    var fileName: String {
-        "\(rawValue).jpg"
-    }
+    var fileName: String { "\(rawValue).jpg" }
 }
 
 @MainActor @Observable
 final class FacePhotoStore {
     private(set) var images: [PhotoSlot: UIImage] = [:]
-
     private let directory: URL
 
     init(fileManager: FileManager = .default) {
@@ -62,49 +50,36 @@ final class FacePhotoStore {
         PhotoFlowDebug.info("FacePhotoStore init directory=\(self.directory.path)")
         do {
             try fileManager.createDirectory(at: self.directory, withIntermediateDirectories: true)
-            PhotoFlowDebug.info("FacePhotoStore directory ready")
         } catch {
             PhotoFlowDebug.error("FacePhotoStore directory create failed error=\(error.localizedDescription)")
         }
         loadSavedImages()
     }
 
-    func image(for slot: PhotoSlot) -> UIImage? {
-        PhotoFlowDebug.debug("FacePhotoStore image lookup slot=\(slot.rawValue) hit=\(self.images[slot] != nil)")
-        return images[slot]
-    }
+    func image(for slot: PhotoSlot) -> UIImage? { images[slot] }
 
     func save(_ image: UIImage, for slot: PhotoSlot) {
-        PhotoFlowDebug.info("FacePhotoStore save requested slot=\(slot.rawValue) sourceSize=\(String(describing: image.size))")
-        let croppedImage: UIImage
-        if let faceCenter = detectFaceCenter(in: image) {
-            PhotoFlowDebug.info("FacePhotoStore face detected at (\(faceCenter.x), \(faceCenter.y)) slot=\(slot.rawValue)")
-            croppedImage = faceCroppedSquare(image, faceCenter: faceCenter)
+        PhotoFlowDebug.info("FacePhotoStore save slot=\(slot.rawValue)")
+        let cropped: UIImage
+        if let center = detectFaceCenter(in: image) {
+            cropped = faceCroppedSquare(image, faceCenter: center)
         } else {
-            croppedImage = centerCroppedSquare(image)
+            cropped = centerCroppedSquare(image)
         }
-        guard let data = croppedImage.jpegData(compressionQuality: 0.82) else {
-            PhotoFlowDebug.error("FacePhotoStore jpeg encoding failed slot=\(slot.rawValue)")
-            return
-        }
-        let destination = fileURL(for: slot)
+        guard let data = cropped.jpegData(compressionQuality: 0.82) else { return }
+        let dest = fileURL(for: slot)
         do {
-            try data.write(to: destination, options: [.atomic])
-            PhotoFlowDebug.info("FacePhotoStore save succeeded slot=\(slot.rawValue) bytes=\(data.count) path=\(destination.path)")
+            try data.write(to: dest, options: [.atomic])
         } catch {
             PhotoFlowDebug.error("FacePhotoStore save failed slot=\(slot.rawValue) error=\(error.localizedDescription)")
         }
-        images[slot] = croppedImage
+        images[slot] = cropped
     }
 
     private func loadSavedImages() {
         for slot in PhotoSlot.allCases {
-            let path = fileURL(for: slot).path
-            if let image = UIImage(contentsOfFile: path) {
+            if let image = UIImage(contentsOfFile: fileURL(for: slot).path) {
                 images[slot] = image
-                PhotoFlowDebug.info("FacePhotoStore loaded saved image slot=\(slot.rawValue) path=\(path)")
-            } else {
-                PhotoFlowDebug.info("FacePhotoStore no saved image slot=\(slot.rawValue) path=\(path)")
             }
         }
     }
@@ -117,68 +92,45 @@ final class FacePhotoStore {
         guard let ciImage = CIImage(image: image) else { return nil }
         let request = VNDetectFaceRectanglesRequest()
         let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            PhotoFlowDebug.error("FacePhotoStore face detection failed: \(error.localizedDescription)")
-            return nil
-        }
+        try? handler.perform([request])
         guard let face = request.results?
             .max(by: { $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height })
         else { return nil }
-
         let box = face.boundingBox
-        return CGPoint(
-            x: box.midX * image.size.width,
-            y: (1 - box.midY) * image.size.height
-        )
+        return CGPoint(x: box.midX * image.size.width, y: (1 - box.midY) * image.size.height)
     }
 
     private func faceCroppedSquare(_ image: UIImage, faceCenter: CGPoint, side: CGFloat = 512) -> UIImage {
         guard image.size.width > 0, image.size.height > 0 else { return image }
-
         let scale = max(side / image.size.width, side / image.size.height)
         let scaledSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
         let drawX = min(0, max(side - scaledSize.width, side / 2 - faceCenter.x * scale))
         let drawY = min(0, max(side - scaledSize.height, side / 2 - faceCenter.y * scale))
-        let drawRect = CGRect(x: drawX, y: drawY, width: scaledSize.width, height: scaledSize.height)
-
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { context in
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
             UIColor.black.setFill()
-            context.fill(CGRect(x: 0, y: 0, width: side, height: side))
-            image.draw(in: drawRect)
+            UIRectFill(CGRect(x: 0, y: 0, width: side, height: side))
+            image.draw(in: CGRect(x: drawX, y: drawY, width: scaledSize.width, height: scaledSize.height))
         }
     }
 
     private func centerCroppedSquare(_ image: UIImage, side: CGFloat = 512) -> UIImage {
-        guard image.size.width > 0, image.size.height > 0 else {
-            PhotoFlowDebug.error("FacePhotoStore crop skipped invalid size=\(String(describing: image.size))")
-            return image
-        }
-
+        guard image.size.width > 0, image.size.height > 0 else { return image }
         let scale = max(side / image.size.width, side / image.size.height)
         let scaledSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let drawRect = CGRect(
-            x: (side - scaledSize.width) / 2,
-            y: (side - scaledSize.height) / 2,
-            width: scaledSize.width,
-            height: scaledSize.height
-        )
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { context in
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
             UIColor.black.setFill()
-            context.fill(CGRect(x: 0, y: 0, width: side, height: side))
-            image.draw(in: drawRect)
+            UIRectFill(CGRect(x: 0, y: 0, width: side, height: side))
+            image.draw(in: CGRect(
+                x: (side - scaledSize.width) / 2, y: (side - scaledSize.height) / 2,
+                width: scaledSize.width, height: scaledSize.height
+            ))
         }
     }
 }
+
+// MARK: - FacePhotoButton
 
 struct FacePhotoButton: View {
     let slot: PhotoSlot
@@ -188,32 +140,23 @@ struct FacePhotoButton: View {
 
     var body: some View {
         Button {
-            PhotoFlowDebug.info("FacePhotoButton tapped slot=\(slot.rawValue) hasImage=\(image != nil) size=\(size)")
             action()
         } label: {
             ZStack {
                 Circle()
                     .fill(.ultraThinMaterial)
-                    .overlay(
-                        Circle()
-                            .strokeBorder(.white.opacity(0.9), lineWidth: max(3, size * 0.07))
-                    )
+                    .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: max(3, size * 0.07)))
                     .shadow(color: .cyan.opacity(0.65), radius: 14)
                     .shadow(color: .black.opacity(0.45), radius: 12, y: 8)
-
                 if let image {
                     Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
+                        .resizable().scaledToFill()
                         .frame(width: size, height: size)
                         .clipShape(Circle())
                 } else {
-                    Text(slot.placeholder)
-                        .font(.system(size: size * 0.48))
+                    Text(slot.placeholder).font(.system(size: size * 0.48))
                 }
-
-                Circle()
-                    .strokeBorder(.cyan.opacity(0.55), lineWidth: 2)
+                Circle().strokeBorder(.cyan.opacity(0.55), lineWidth: 2)
             }
             .frame(width: size, height: size)
             .accessibilityLabel("\(slot.label) 얼굴 사진 선택")
@@ -221,6 +164,278 @@ struct FacePhotoButton: View {
         .buttonStyle(.plain)
     }
 }
+
+// MARK: - Custom Photo Album Picker
+
+struct PhotoAlbum: Identifiable {
+    let id: String
+    let title: String
+    let collection: PHAssetCollection?
+    let count: Int
+    let coverAsset: PHAsset?
+}
+
+struct CustomPhotoPicker: View {
+    let onImagePicked: (UIImage) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var authStatus: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    @State private var albums: [PhotoAlbum] = []
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch authStatus {
+                case .authorized, .limited:
+                    albumList
+                case .denied, .restricted:
+                    deniedView
+                default:
+                    ProgressView("권한 요청 중...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black)
+                }
+            }
+            .navigationTitle("앨범")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.black, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") { dismiss() }.foregroundStyle(.cyan)
+                }
+            }
+        }
+        .task { await requestAndLoad() }
+    }
+
+    private var albumList: some View {
+        Group {
+            if albums.isEmpty {
+                ProgressView("불러오는 중...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+            } else {
+                List(albums) { album in
+                    NavigationLink {
+                        AlbumPhotosGrid(album: album) { image in
+                            onImagePicked(image)
+                            dismiss()
+                        }
+                    } label: {
+                        AlbumRow(album: album)
+                    }
+                    .listRowBackground(Color.black)
+                    .listRowSeparatorTint(.white.opacity(0.1))
+                }
+                .listStyle(.plain)
+                .background(Color.black)
+                .scrollContentBackground(.hidden)
+            }
+        }
+    }
+
+    private var deniedView: some View {
+        ContentUnavailableView {
+            Label("사진 접근 권한 없음", systemImage: "photo.slash")
+        } description: {
+            Text("설정 앱에서 FingerTime의 사진 접근을 허용해 주세요.")
+        } actions: {
+            Button("설정 열기") {
+                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                UIApplication.shared.open(url)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.cyan)
+        }
+    }
+
+    private func requestAndLoad() async {
+        if authStatus != .authorized && authStatus != .limited {
+            authStatus = await withCheckedContinuation { cont in
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { cont.resume(returning: $0) }
+            }
+        }
+        guard authStatus == .authorized || authStatus == .limited else { return }
+        albums = buildAlbumList()
+    }
+
+    private func buildAlbumList() -> [PhotoAlbum] {
+        var result: [PhotoAlbum] = []
+        let imagePredicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        let recentFirst = [NSSortDescriptor(key: "creationDate", ascending: false)]
+
+        // 최근 항목 (all photos)
+        let allOpts = PHFetchOptions()
+        allOpts.predicate = imagePredicate
+        let allFetch = PHAsset.fetchAssets(with: .image, options: allOpts)
+        if allFetch.count > 0 {
+            result.append(PhotoAlbum(id: "__all__", title: "최근 항목",
+                                     collection: nil, count: allFetch.count,
+                                     coverAsset: allFetch.firstObject))
+        }
+
+        // User albums
+        PHAssetCollection
+            .fetchAssetCollections(with: .album, subtype: .any, options: nil)
+            .enumerateObjects { col, _, _ in
+                let opts = PHFetchOptions(); opts.predicate = imagePredicate
+                let count = PHAsset.fetchAssets(in: col, options: opts).count
+                guard count > 0 else { return }
+                let coverOpts = PHFetchOptions()
+                coverOpts.sortDescriptors = recentFirst; coverOpts.fetchLimit = 1
+                result.append(PhotoAlbum(id: col.localIdentifier, title: col.localizedTitle ?? "앨범",
+                                         collection: col, count: count,
+                                         coverAsset: PHAsset.fetchAssets(in: col, options: coverOpts).firstObject))
+            }
+
+        // Smart albums
+        for (subtype, title) in [(PHAssetCollectionSubtype.smartAlbumFavorites, "즐겨찾기"),
+                                  (.smartAlbumSelfPortraits, "셀카"),
+                                  (.smartAlbumScreenshots, "스크린샷")] {
+            guard let col = PHAssetCollection
+                .fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil).firstObject
+            else { continue }
+            let opts = PHFetchOptions(); opts.predicate = imagePredicate
+            let count = PHAsset.fetchAssets(in: col, options: opts).count
+            guard count > 0 else { continue }
+            let coverOpts = PHFetchOptions()
+            coverOpts.sortDescriptors = recentFirst; coverOpts.fetchLimit = 1
+            result.append(PhotoAlbum(id: col.localIdentifier, title: title, collection: col,
+                                     count: count,
+                                     coverAsset: PHAsset.fetchAssets(in: col, options: coverOpts).firstObject))
+        }
+
+        return result
+    }
+}
+
+private struct AlbumRow: View {
+    let album: PhotoAlbum
+    @State private var cover: UIImage?
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Color.gray.opacity(0.25)
+                if let cover {
+                    Image(uiImage: cover).resizable().scaledToFill()
+                }
+            }
+            .frame(width: 60, height: 60)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(album.title).font(.body.weight(.medium)).foregroundStyle(.white)
+                Text("\(album.count)").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .onAppear { loadCover() }
+    }
+
+    private func loadCover() {
+        guard let asset = album.coverAsset else { return }
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .fastFormat
+        opts.resizeMode = .fast
+        opts.isNetworkAccessAllowed = false
+        PHImageManager.default().requestImage(
+            for: asset, targetSize: CGSize(width: 120, height: 120),
+            contentMode: .aspectFill, options: opts
+        ) { image, _ in
+            guard let image else { return }
+            Task { @MainActor in cover = image }
+        }
+    }
+}
+
+private struct AlbumPhotosGrid: View {
+    let album: PhotoAlbum
+    let onImagePicked: (UIImage) -> Void
+
+    @State private var assets: [PHAsset] = []
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 2) {
+                ForEach(assets, id: \.localIdentifier) { asset in
+                    PhotoThumbnailCell(asset: asset, onSelect: onImagePicked)
+                }
+            }
+        }
+        .background(Color.black.ignoresSafeArea())
+        .navigationTitle(album.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.black, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .task { assets = fetchAssets() }
+    }
+
+    private func fetchAssets() -> [PHAsset] {
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        let fetch: PHFetchResult<PHAsset> = album.collection.map {
+            PHAsset.fetchAssets(in: $0, options: opts)
+        } ?? PHAsset.fetchAssets(with: .image, options: opts)
+        var result: [PHAsset] = []
+        fetch.enumerateObjects { asset, _, _ in result.append(asset) }
+        return result
+    }
+}
+
+private struct PhotoThumbnailCell: View {
+    let asset: PHAsset
+    let onSelect: (UIImage) -> Void
+
+    @State private var thumbnail: UIImage?
+
+    var body: some View {
+        Button { loadFullImage() } label: {
+            ZStack {
+                Color.gray.opacity(0.2)
+                if let thumbnail {
+                    Image(uiImage: thumbnail).resizable().scaledToFill()
+                }
+            }
+            .aspectRatio(1, contentMode: .fit)
+            .clipped()
+        }
+        .buttonStyle(.plain)
+        .onAppear { loadThumbnail() }
+    }
+
+    private func loadThumbnail() {
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .opportunistic
+        opts.resizeMode = .fast
+        opts.isNetworkAccessAllowed = false
+        PHImageManager.default().requestImage(
+            for: asset, targetSize: CGSize(width: 220, height: 220),
+            contentMode: .aspectFill, options: opts
+        ) { image, _ in
+            guard let image else { return }
+            Task { @MainActor in thumbnail = image }
+        }
+    }
+
+    private func loadFullImage() {
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .highQualityFormat
+        opts.isNetworkAccessAllowed = true
+        PHImageManager.default().requestImage(
+            for: asset, targetSize: PHImageManagerMaximumSize,
+            contentMode: .aspectFit, options: opts
+        ) { image, info in
+            guard let image, info?[PHImageResultIsDegradedKey] as? Bool != true else { return }
+            Task { @MainActor in onSelect(image) }
+        }
+    }
+}
+
+// MARK: - Camera Picker
 
 struct CameraImagePicker: UIViewControllerRepresentable {
     let onImagePicked: (UIImage) -> Void
@@ -236,36 +451,23 @@ struct CameraImagePicker: UIViewControllerRepresentable {
         return picker
     }
 
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
-        PhotoFlowDebug.debug("CameraImagePicker updateUIViewController")
-    }
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
 
-    func makeCoordinator() -> Coordinator {
-        PhotoFlowDebug.info("CameraImagePicker makeCoordinator")
-        return Coordinator(parent: self)
-    }
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     @MainActor final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
         private let parent: CameraImagePicker
 
-        init(parent: CameraImagePicker) {
-            self.parent = parent
-        }
+        init(parent: CameraImagePicker) { self.parent = parent }
 
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            PhotoFlowDebug.info("CameraImagePicker didFinishPickingMedia keys=\(info.keys.map { $0.rawValue }.joined(separator: ","))")
             if let image = info[.originalImage] as? UIImage {
-                PhotoFlowDebug.info("CameraImagePicker original image received size=\(String(describing: image.size))")
                 parent.onImagePicked(image)
-            } else {
-                PhotoFlowDebug.error("CameraImagePicker original image missing")
             }
             parent.dismiss()
-            PhotoFlowDebug.info("CameraImagePicker dismissed after pick")
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            PhotoFlowDebug.info("CameraImagePicker cancelled")
             parent.dismiss()
         }
     }

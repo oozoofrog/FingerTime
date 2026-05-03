@@ -5,7 +5,6 @@
 //  Created by oozoofrog on 5/3/26.
 //
 
-import PhotosUI
 import SwiftUI
 import UIKit
 struct ContentView: View {
@@ -13,10 +12,19 @@ struct ContentView: View {
     @State private var photoStore = FacePhotoStore()
 
     @State private var sourceDialogSlot: PhotoSlot?
-    @State private var pendingPhotoSlot: PhotoSlot?
-    @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var isShowingPhotoPicker = false
-    @State private var isShowingCamera = false
+    @State private var activeSheet: ActiveSheet?
+
+    private enum ActiveSheet: Identifiable {
+        case photoPicker(PhotoSlot)
+        case camera(PhotoSlot)
+
+        var id: String {
+            switch self {
+            case .photoPicker(let slot): "photos-\(slot.rawValue)"
+            case .camera(let slot): "camera-\(slot.rawValue)"
+            }
+        }
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -111,26 +119,21 @@ struct ContentView: View {
         } message: { slot in
             Text("\(slot.label) 위치에 넣을 사진을 선택하세요.")
         }
-        .photosPicker(isPresented: $isShowingPhotoPicker, selection: $selectedPhotoItem, matching: .images)
         .onChange(of: sourceDialogSlot) { _, newSlot in
-            logSourceDialogSlotChange(newSlot)
+            PhotoFlowDebug.info("sourceDialogSlot changed to \(newSlot?.rawValue ?? "nil")")
         }
-        .onChange(of: pendingPhotoSlot) { _, newSlot in
-            logPendingPhotoSlotChange(newSlot)
-        }
-        .onChange(of: isShowingPhotoPicker) { _, isShowing in
-            logPhotoPickerPresentationChange(isShowing)
-        }
-        .onChange(of: isShowingCamera) { _, isShowing in
-            logCameraPresentationChange(isShowing)
-        }
-        .onChange(of: selectedPhotoItem) { _, newItem in
-            handleSelectedPhotoItemChange(newItem)
-        }
-        .sheet(isPresented: $isShowingCamera) {
-            CameraImagePicker(onImagePicked: handleCameraImagePicked)
-            .ignoresSafeArea()
-            .onAppear(perform: logCameraSheetAppeared)
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .photoPicker(let slot):
+                CustomPhotoPicker { image in
+                    handlePickedImage(image, for: slot)
+                }
+            case .camera(let slot):
+                CameraImagePicker { image in
+                    handlePickedImage(image, for: slot)
+                }
+                .ignoresSafeArea()
+            }
         }
     }
 
@@ -149,104 +152,27 @@ struct ContentView: View {
 
     private func presentPhotoPicker(for slot: PhotoSlot) {
         PhotoFlowDebug.info("presentPhotoPicker requested slot=\(slot.rawValue)")
-        pendingPhotoSlot = slot
-        selectedPhotoItem = nil
         sourceDialogSlot = nil
-
         Task { @MainActor in
-            PhotoFlowDebug.info("presentPhotoPicker waiting for dialog dismissal slot=\(slot.rawValue)")
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            PhotoFlowDebug.info("presentPhotoPicker toggling picker true slot=\(slot.rawValue)")
-            isShowingPhotoPicker = true
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            PhotoFlowDebug.info("presentPhotoPicker presenting sheet slot=\(slot.rawValue)")
+            activeSheet = .photoPicker(slot)
         }
     }
 
     private func presentCamera(for slot: PhotoSlot) {
         PhotoFlowDebug.info("presentCamera requested slot=\(slot.rawValue)")
-        pendingPhotoSlot = slot
         sourceDialogSlot = nil
-
         Task { @MainActor in
-            PhotoFlowDebug.info("presentCamera waiting for dialog dismissal slot=\(slot.rawValue)")
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            PhotoFlowDebug.info("presentCamera toggling camera true slot=\(slot.rawValue)")
-            isShowingCamera = true
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            PhotoFlowDebug.info("presentCamera presenting sheet slot=\(slot.rawValue)")
+            activeSheet = .camera(slot)
         }
     }
 
-    private func handleSelectedPhotoItemChange(_ newItem: PhotosPickerItem?) {
-        let hasItem = newItem != nil
-        let slotName = pendingPhotoSlot?.rawValue ?? "nil"
-        PhotoFlowDebug.info("selectedPhotoItem changed hasItem=\(hasItem) pendingSlot=\(slotName)")
-        guard let newItem, let pendingPhotoSlot else {
-            PhotoFlowDebug.info("selectedPhotoItem ignored because item or pending slot is nil")
-            return
-        }
-
-        Task {
-            await loadSelectedPhotoItem(newItem, for: pendingPhotoSlot)
-        }
-    }
-
-    private func loadSelectedPhotoItem(_ item: PhotosPickerItem, for slot: PhotoSlot) async {
-        PhotoFlowDebug.info("PhotosPicker loadTransferable started slot=\(slot.rawValue)")
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                PhotoFlowDebug.error("PhotosPicker loadTransferable returned nil slot=\(slot.rawValue)")
-                return
-            }
-            PhotoFlowDebug.info("PhotosPicker data loaded bytes=\(data.count) slot=\(slot.rawValue)")
-
-            guard let image = UIImage(data: data) else {
-                PhotoFlowDebug.error("PhotosPicker UIImage decode failed slot=\(slot.rawValue)")
-                return
-            }
-            PhotoFlowDebug.info("PhotosPicker UIImage decoded size=\(String(describing: image.size)) slot=\(slot.rawValue)")
-
-            await MainActor.run {
-                PhotoFlowDebug.info("PhotosPicker saving image slot=\(slot.rawValue)")
-                photoStore.save(image, for: slot)
-                self.pendingPhotoSlot = nil
-                selectedPhotoItem = nil
-                PhotoFlowDebug.info("PhotosPicker save flow completed")
-            }
-        } catch {
-            PhotoFlowDebug.error("PhotosPicker load failed error=\(error.localizedDescription) slot=\(slot.rawValue)")
-        }
-    }
-
-    private func handleCameraImagePicked(_ image: UIImage) {
-        guard let pendingPhotoSlot else {
-            PhotoFlowDebug.error("Camera callback ignored because pendingPhotoSlot is nil")
-            return
-        }
-        PhotoFlowDebug.info("Camera callback received image size=\(String(describing: image.size)) slot=\(pendingPhotoSlot.rawValue)")
-        photoStore.save(image, for: pendingPhotoSlot)
-        self.pendingPhotoSlot = nil
-        PhotoFlowDebug.info("Camera save flow completed")
-    }
-
-    private func logSourceDialogSlotChange(_ slot: PhotoSlot?) {
-        let slotName = slot?.rawValue ?? "nil"
-        PhotoFlowDebug.info("sourceDialogSlot changed to \(slotName)")
-    }
-
-    private func logPendingPhotoSlotChange(_ slot: PhotoSlot?) {
-        let slotName = slot?.rawValue ?? "nil"
-        PhotoFlowDebug.info("pendingPhotoSlot changed to \(slotName)")
-    }
-
-    private func logPhotoPickerPresentationChange(_ isShowing: Bool) {
-        PhotoFlowDebug.info("isShowingPhotoPicker changed to \(isShowing)")
-    }
-
-    private func logCameraPresentationChange(_ isShowing: Bool) {
-        PhotoFlowDebug.info("isShowingCamera changed to \(isShowing)")
-    }
-
-    private func logCameraSheetAppeared() {
-        let slotName = pendingPhotoSlot?.rawValue ?? "nil"
-        PhotoFlowDebug.info("Camera sheet appeared pendingSlot=\(slotName)")
+    private func handlePickedImage(_ image: UIImage, for slot: PhotoSlot) {
+        PhotoFlowDebug.info("image picked slot=\(slot.rawValue) size=\(String(describing: image.size))")
+        photoStore.save(image, for: slot)
     }
 
     private var topTitle: some View {
