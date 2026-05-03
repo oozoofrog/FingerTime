@@ -23,7 +23,7 @@ struct ContentView: View {
             let horizontalPadding: CGFloat = proxy.size.width >= 700 ? 32 : 20
             let topPadding = proxy.safeAreaInsets.top + 18
             let bottomPadding = proxy.safeAreaInsets.bottom + 18
-            let chromeHeight: CGFloat = 124
+            let chromeHeight: CGFloat = 180
             let contentWidth = max(0, proxy.size.width - horizontalPadding * 2)
             let titleWidth = min(max(280, contentWidth - 230), 560)
             let toggleWidth: CGFloat = 174
@@ -57,9 +57,24 @@ struct ContentView: View {
                     .frame(width: toggleWidth)
                     .position(x: proxy.size.width - horizontalPadding - toggleWidth / 2, y: topPadding + 42)
 
+                photoSlotBar
+                    .position(x: proxy.size.width / 2, y: proxy.size.height - bottomPadding - 72)
+
+                photoAddFAB
+                    .position(
+                        x: proxy.size.width - horizontalPadding - 26,
+                        y: proxy.size.height - bottomPadding - 72
+                    )
+
+                handPhotoFAB
+                    .position(
+                        x: proxy.size.width - horizontalPadding - 46,
+                        y: proxy.size.height - bottomPadding - 145
+                    )
+
                 creditBar
                     .frame(width: contentWidth, alignment: .leading)
-                    .position(x: proxy.size.width / 2, y: proxy.size.height - bottomPadding - 26)
+                    .position(x: proxy.size.width / 2, y: proxy.size.height - bottomPadding - 22)
             }
         }
         .preferredColorScheme(.dark)
@@ -264,6 +279,120 @@ struct ContentView: View {
                 .stroke(.cyan.opacity(0.3), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.5), radius: 8, y: 4)
+    }
+
+    private var photoAddFAB: some View {
+        Menu {
+            ForEach(PhotoSlot.allCases) { slot in
+                Button {
+                    sourceDialogSlot = slot
+                } label: {
+                    Label {
+                        Text(slot.label)
+                    } icon: {
+                        Text(slot.placeholder)
+                    }
+                }
+            }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.cyan.opacity(0.9), .purple.opacity(0.7)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .shadow(color: .cyan.opacity(0.55), radius: 14)
+                    .shadow(color: .black.opacity(0.45), radius: 8, y: 4)
+
+                Image(systemName: "person.crop.circle.badge.plus")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 52, height: 52)
+        }
+    }
+
+    private var handPhotoFAB: some View {
+        Menu {
+            ForEach(PhotoSlot.allCases.filter { $0 != .center }) { slot in
+                Button {
+                    sourceDialogSlot = slot
+                } label: {
+                    Label {
+                        Text(slot.label)
+                    } icon: {
+                        Text(slot.placeholder)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.badge.plus")
+                    .font(.system(size: 15, weight: .bold))
+                Text("침 사진")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                LinearGradient(
+                    colors: [.orange.opacity(0.9), .pink.opacity(0.8)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: Capsule()
+            )
+            .shadow(color: .orange.opacity(0.5), radius: 12)
+            .shadow(color: .black.opacity(0.4), radius: 6, y: 3)
+        }
+    }
+
+    private var photoSlotBar: some View {
+        HStack(spacing: 20) {
+            ForEach(PhotoSlot.allCases) { slot in
+                Button {
+                    sourceDialogSlot = slot
+                } label: {
+                    VStack(spacing: 4) {
+                        ZStack {
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(.white.opacity(0.6), lineWidth: 2)
+                                )
+
+                            if let image = photoStore.image(for: slot) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .clipShape(Circle())
+                            } else {
+                                Text(slot.placeholder)
+                                    .font(.system(size: 18))
+                            }
+                        }
+                        .frame(width: 36, height: 36)
+
+                        Text(slot.label)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.72))
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.42), in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(.cyan.opacity(0.2), lineWidth: 1)
+        )
     }
 
     private var creditBar: some View {
