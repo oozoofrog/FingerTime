@@ -100,26 +100,19 @@ struct ContentView: View {
             }
         }
         .confirmationDialog(
-            "얼굴 사진 선택",
+            sourceDialogSlot.map { "\($0.label) 위치에 넣을 사진을 선택하세요." } ?? "얼굴 사진 선택",
             isPresented: $isDialogPresented,
-            presenting: sourceDialogSlot
-        ) { slot in
+            titleVisibility: .visible
+        ) {
             Button("사진 보관함에서 선택") {
-                presentPhotoPicker(for: slot)
+                if let slot = sourceDialogSlot { presentPhotoPicker(for: slot) }
             }
-
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button("카메라로 찍기") {
-                    presentCamera(for: slot)
+                    if let slot = sourceDialogSlot { presentCamera(for: slot) }
                 }
-            } else {
-                Button("카메라 사용 불가") {}
-                    .disabled(true)
             }
-
             Button("취소", role: .cancel) {}
-        } message: { slot in
-            Text("\(slot.label) 위치에 넣을 사진을 선택하세요.")
         }
         .onChange(of: sourceDialogSlot) { _, newSlot in
             PhotoFlowDebug.info("sourceDialogSlot changed to \(newSlot?.rawValue ?? "nil")")
