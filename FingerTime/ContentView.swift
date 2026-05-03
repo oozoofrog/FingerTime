@@ -35,18 +35,20 @@ struct ContentView: View {
                 SpaceBackgroundView(background: clockModel.currentBackground)
                     .id(clockModel.currentBackground.id)
 
-                ClockFaceView(
-                    time: clockModel.displayedTime,
-                    photoStore: photoStore,
-                    diameter: clockDiameter,
-                    onDragDelta: { hand, delta in
-                        clockModel.applyDragDelta(delta, to: hand)
-                    },
-                    onPhotoTap: { slot in
-                        PhotoFlowDebug.info("ContentView.onPhotoTap received slot=\(slot.rawValue)")
-                        sourceDialogSlot = slot
-                    }
-                )
+                TimelineView(.periodic(from: Date(), by: 0.25)) { timeline in
+                    ClockFaceView(
+                        time: clockModel.timeAt(timeline.date),
+                        photoStore: photoStore,
+                        diameter: clockDiameter,
+                        onDragDelta: { hand, delta in
+                            clockModel.applyDragDelta(delta, to: hand)
+                        },
+                        onPhotoTap: { slot in
+                            PhotoFlowDebug.info("ContentView.onPhotoTap received slot=\(slot.rawValue)")
+                            sourceDialogSlot = slot
+                        }
+                    )
+                }
                 .position(x: proxy.size.width / 2, y: clockCenterY)
 
                 topTitle
@@ -83,10 +85,8 @@ struct ContentView: View {
         }
         .task {
             while !Task.isCancelled {
-                await MainActor.run {
-                    clockModel.tick()
-                }
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                clockModel.tick()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
         .confirmationDialog(

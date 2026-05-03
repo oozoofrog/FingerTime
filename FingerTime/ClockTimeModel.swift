@@ -10,25 +10,25 @@ import Observation
 
 @MainActor @Observable
 final class ClockTimeModel {
-    private(set) var displayedTime: ClockTime
     var isFreePlayMode = false {
         didSet {
-            guard oldValue != isFreePlayMode else {
-                return
-            }
-
+            guard oldValue != isFreePlayMode else { return }
             manualAnchor = nil
             if isFreePlayMode {
-                let twelveOClock = ClockTime(hour: 0, minute: 0, second: 0)
-                displayedTime = twelveOClock
-                backgroundRotator.update(for: twelveOClock)
+                setBackground(for: ClockTime(hour: 0, minute: 0, second: 0))
             }
         }
     }
-    private(set) var backgroundRotator: SpaceBackgroundRotator
+
+    // Observable: only triggers re-render when background actually rotates (hourly)
+    private(set) var currentBackground: NASASpaceBackground
+
+    // Not observable: struct mutations happen on every tick() but only currentBackground notifies
+    @ObservationIgnored private var backgroundRotator: SpaceBackgroundRotator
 
     private let autoReturnDelay: TimeInterval
     private let calendar: Calendar
+    // Observable: drag updates this → TimelineView reacts immediately without waiting for next tick
     private var manualAnchor: (time: ClockTime, date: Date)?
 
     init(
@@ -40,45 +40,50 @@ final class ClockTimeModel {
     ) {
         self.autoReturnDelay = autoReturnDelay
         self.calendar = calendar
-
         let initialTime = ClockTime(date: now, calendar: calendar)
-        displayedTime = initialTime
         backgroundRotator = SpaceBackgroundRotator(
             backgrounds: shuffleBackgrounds ? backgrounds.shuffled() : backgrounds,
             initialTime: initialTime
         )
+        currentBackground = backgroundRotator.current
     }
 
-    var currentBackground: NASASpaceBackground {
-        backgroundRotator.current
-    }
-
-    func tick(now: Date = Date()) {
-        guard !isFreePlayMode else {
-            return
+    /// Pure time computation — no side effects. Called from TimelineView content on each frame.
+    func timeAt(_ date: Date) -> ClockTime {
+        if isFreePlayMode {
+            return manualAnchor?.time ?? ClockTime(hour: 0, minute: 0, second: 0)
         }
-
-        let nextTime: ClockTime
         if let manualAnchor {
-            let elapsed = now.timeIntervalSince(manualAnchor.date)
+            let elapsed = date.timeIntervalSince(manualAnchor.date)
             if elapsed >= autoReturnDelay {
-                self.manualAnchor = nil
-                nextTime = ClockTime(date: now, calendar: calendar)
-            } else {
-                nextTime = manualAnchor.time.adding(seconds: elapsed)
+                return ClockTime(date: date, calendar: calendar)
             }
-        } else {
-            nextTime = ClockTime(date: now, calendar: calendar)
+            return manualAnchor.time.adding(seconds: elapsed)
         }
+        return ClockTime(date: date, calendar: calendar)
+    }
 
-        displayedTime = nextTime
-        backgroundRotator.update(for: nextTime)
+    /// Called at 1 Hz for state maintenance: expiring the manual anchor and rotating the background.
+    func tick(now: Date = Date()) {
+        guard !isFreePlayMode else { return }
+        if let anchor = manualAnchor, now.timeIntervalSince(anchor.date) >= autoReturnDelay {
+            manualAnchor = nil
+        }
+        setBackground(for: timeAt(now))
     }
 
     func applyDragDelta(_ deltaDegrees: Double, to hand: ClockHand, now: Date = Date()) {
-        let nextTime = ClockTimeMath.applyingDragDelta(deltaDegrees, to: hand, current: displayedTime)
-        displayedTime = nextTime
-        manualAnchor = isFreePlayMode ? nil : (nextTime, now)
-        backgroundRotator.update(for: nextTime)
+        let nextTime = ClockTimeMath.applyingDragDelta(deltaDegrees, to: hand, current: timeAt(now))
+        // .distantPast sentinel: free-play anchors are never expired by tick()
+        manualAnchor = isFreePlayMode ? (nextTime, .distantPast) : (nextTime, now)
+        setBackground(for: nextTime)
+    }
+
+    private func setBackground(for time: ClockTime) {
+        backgroundRotator.update(for: time)
+        let newBackground = backgroundRotator.current
+        if newBackground != currentBackground {
+            currentBackground = newBackground
+        }
     }
 }

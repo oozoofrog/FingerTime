@@ -84,11 +84,11 @@ struct FingerTimeTests {
         model.applyDragDelta(360, to: .minute, now: base)
         model.tick(now: base.addingTimeInterval(30))
 
-        #expect(model.displayedTime.hour == 1)
+        #expect(model.timeAt(base.addingTimeInterval(30)).hour == 1)
 
         model.tick(now: base.addingTimeInterval(61))
 
-        #expect(model.displayedTime.hour == ClockTime(date: base.addingTimeInterval(61), calendar: calendar).hour)
+        #expect(model.timeAt(base.addingTimeInterval(61)).hour == ClockTime(date: base.addingTimeInterval(61), calendar: calendar).hour)
     }
 
     @MainActor
@@ -105,8 +105,9 @@ struct FingerTimeTests {
         model.isFreePlayMode = true
         model.tick(now: base.addingTimeInterval(42))
 
-        #expect(model.displayedTime.secondsSinceMidnight == 0)
-        #expect(ClockTimeMath.angles(for: model.displayedTime) == ClockAngles(hour: 0, minute: 0, second: 0))
+        let frozenTime = model.timeAt(base)
+        #expect(frozenTime.secondsSinceMidnight == 0)
+        #expect(ClockTimeMath.angles(for: frozenTime) == ClockAngles(hour: 0, minute: 0, second: 0))
     }
 
     @MainActor
@@ -124,6 +125,6 @@ struct FingerTimeTests {
         model.applyDragDelta(360, to: .minute, now: base)
         model.tick(now: base.addingTimeInterval(30))
 
-        #expect(model.displayedTime.secondsSinceMidnight == 3_600)
+        #expect(model.timeAt(base).secondsSinceMidnight == 3_600)
     }
 }
