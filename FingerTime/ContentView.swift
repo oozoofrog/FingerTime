@@ -17,12 +17,14 @@ struct ContentView: View {
         case sourceDialog(PhotoSlot)
         case photoPicker(PhotoSlot)
         case camera(PhotoSlot)
+        case faceSelection(PhotoSlot, UIImage, [CGRect])
 
         var id: String {
             switch self {
             case .sourceDialog(let slot): "dialog-\(slot.rawValue)"
             case .photoPicker(let slot): "photos-\(slot.rawValue)"
             case .camera(let slot): "camera-\(slot.rawValue)"
+            case .faceSelection(let slot, _, _): "face-selection-\(slot.rawValue)"
             }
         }
     }
@@ -117,13 +119,27 @@ struct ContentView: View {
                     handlePickedImage(image, for: slot)
                 }
                 .ignoresSafeArea()
+            case .faceSelection(let slot, let image, let faces):
+                FaceSelectionView(image: image, faceBounds: faces) { center in
+                    if let center {
+                        photoStore.save(image, faceCenter: center, for: slot)
+                    }
+                }
             }
         }
     }
 
     private func handlePickedImage(_ image: UIImage, for slot: PhotoSlot) {
         PhotoFlowDebug.info("image picked slot=\(slot.rawValue) size=\(String(describing: image.size))")
-        photoStore.save(image, for: slot)
+        Task {
+            let faces = await photoStore.detectFaces(in: image)
+            if faces.count > 1 {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                activeSheet = .faceSelection(slot, image, faces)
+            } else {
+                photoStore.save(image, faceCenter: faces.first.map { CGPoint(x: $0.midX, y: $0.midY) }, for: slot)
+            }
+        }
     }
 
     private var topTitle: some View {
@@ -315,6 +331,69 @@ private struct PhotoSourceSheet: View {
                 .foregroundStyle(color)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Face Selection View
+
+private struct FaceSelectionView: View {
+    let image: UIImage
+    let faceBounds: [CGRect]
+    let onSelect: (CGPoint?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            GeometryReader { geo in
+                let imgW = image.size.width
+                let imgH = image.size.height
+                let scale = min(geo.size.width / imgW, geo.size.height / imgH)
+                let offX = (geo.size.width - imgW * scale) / 2
+                let offY = (geo.size.height - imgH * scale) / 2
+
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: geo.size.width, height: geo.size.height)
+
+                    ForEach(Array(faceBounds.enumerated()), id: \.offset) { _, rect in
+                        let vx = rect.midX * scale + offX
+                        let vy = rect.midY * scale + offY
+                        let vw = max(rect.width * scale, 56)
+                        Button {
+                            dismiss()
+                            onSelect(CGPoint(x: rect.midX, y: rect.midY))
+                        } label: {
+                            Circle()
+                                .strokeBorder(.cyan, lineWidth: 3)
+                                .background(Circle().fill(.cyan.opacity(0.12)))
+                                .overlay {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: vw * 0.3, weight: .bold))
+                                        .foregroundStyle(.cyan)
+                                }
+                                .frame(width: vw, height: vw)
+                        }
+                        .buttonStyle(.plain)
+                        .position(x: vx, y: vy)
+                    }
+                }
+            }
+            .ignoresSafeArea()
+            .navigationTitle("얼굴을 선택하세요")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.black, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") { dismiss(); onSelect(nil) }
+                        .foregroundStyle(.cyan)
+                }
+            }
+        }
     }
 }
 

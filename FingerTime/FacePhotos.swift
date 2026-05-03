@@ -58,37 +58,61 @@ final class FacePhotoStore {
 
     func image(for slot: PhotoSlot) -> UIImage? { images[slot] }
 
+    /// Returns all detected face bounding rects in image pixel coordinates (y-down), largest first.
+    func detectFaces(in image: UIImage) async -> [CGRect] {
+        let orientation = visionOrientation(image.imageOrientation)
+        return await Task.detached(priority: .userInitiated) {
+            FacePhotoStore.detectAllFaceBounds(in: image, orientation: orientation)
+        }.value
+    }
+
+    /// Auto-detect faces and save; if multiple faces exist, uses the largest one.
     func save(_ image: UIImage, for slot: PhotoSlot) {
         PhotoFlowDebug.info("FacePhotoStore save slot=\(slot.rawValue)")
-        // Extract orientation on MainActor before crossing concurrency boundary
-        let orientation: CGImagePropertyOrientation = {
-            switch image.imageOrientation {
-            case .up:            return .up
-            case .upMirrored:    return .upMirrored
-            case .down:          return .down
-            case .downMirrored:  return .downMirrored
-            case .left:          return .left
-            case .leftMirrored:  return .leftMirrored
-            case .right:         return .right
-            case .rightMirrored: return .rightMirrored
-            @unknown default:    return .up
-            }
-        }()
+        let orientation = visionOrientation(image.imageOrientation)
         Task {
-            let cropped: UIImage = await Task.detached(priority: .userInitiated) {
-                if let center = FacePhotoStore.detectFaceCenter(in: image, orientation: orientation) {
-                    return FacePhotoStore.faceCroppedSquare(image, faceCenter: center)
-                }
-                return FacePhotoStore.centerCroppedSquare(image)
+            let faceCenter: CGPoint? = await Task.detached(priority: .userInitiated) {
+                FacePhotoStore.detectAllFaceBounds(in: image, orientation: orientation)
+                    .first.map { CGPoint(x: $0.midX, y: $0.midY) }
             }.value
-            guard let data = cropped.jpegData(compressionQuality: 0.82) else { return }
-            let dest = self.fileURL(for: slot)
-            do {
-                try data.write(to: dest, options: [.atomic])
-            } catch {
-                PhotoFlowDebug.error("FacePhotoStore save failed slot=\(slot.rawValue) error=\(error.localizedDescription)")
+            await persistCropped(image, faceCenter: faceCenter, for: slot)
+        }
+    }
+
+    /// Save with an explicitly chosen face center (nil = center crop).
+    func save(_ image: UIImage, faceCenter: CGPoint?, for slot: PhotoSlot) {
+        PhotoFlowDebug.info("FacePhotoStore save slot=\(slot.rawValue) explicit faceCenter=\(String(describing: faceCenter))")
+        Task { await persistCropped(image, faceCenter: faceCenter, for: slot) }
+    }
+
+    private func persistCropped(_ image: UIImage, faceCenter: CGPoint?, for slot: PhotoSlot) async {
+        let cropped: UIImage = await Task.detached(priority: .userInitiated) {
+            if let center = faceCenter {
+                return FacePhotoStore.faceCroppedSquare(image, faceCenter: center)
             }
-            self.images[slot] = cropped
+            return FacePhotoStore.centerCroppedSquare(image)
+        }.value
+        guard let data = cropped.jpegData(compressionQuality: 0.82) else { return }
+        let dest = fileURL(for: slot)
+        do {
+            try data.write(to: dest, options: [.atomic])
+        } catch {
+            PhotoFlowDebug.error("FacePhotoStore save failed slot=\(slot.rawValue) error=\(error.localizedDescription)")
+        }
+        images[slot] = cropped
+    }
+
+    private func visionOrientation(_ uiOrientation: UIImage.Orientation) -> CGImagePropertyOrientation {
+        switch uiOrientation {
+        case .up:            return .up
+        case .upMirrored:    return .upMirrored
+        case .down:          return .down
+        case .downMirrored:  return .downMirrored
+        case .left:          return .left
+        case .leftMirrored:  return .leftMirrored
+        case .right:         return .right
+        case .rightMirrored: return .rightMirrored
+        @unknown default:    return .up
         }
     }
 
@@ -104,16 +128,21 @@ final class FacePhotoStore {
         directory.appendingPathComponent(slot.fileName)
     }
 
-    private nonisolated static func detectFaceCenter(in image: UIImage, orientation: CGImagePropertyOrientation) -> CGPoint? {
-        guard let cgImage = image.cgImage else { return nil }
+    private nonisolated static func detectAllFaceBounds(in image: UIImage, orientation: CGImagePropertyOrientation) -> [CGRect] {
+        guard let cgImage = image.cgImage else { return [] }
         let request = VNDetectFaceRectanglesRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
         try? handler.perform([request])
-        guard let face = request.results?
-            .max(by: { $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height })
-        else { return nil }
-        let box = face.boundingBox
-        return CGPoint(x: box.midX * image.size.width, y: (1 - box.midY) * image.size.height)
+        guard let results = request.results, !results.isEmpty else { return [] }
+        let W = image.size.width, H = image.size.height
+        return results
+            .sorted { $0.boundingBox.width * $0.boundingBox.height > $1.boundingBox.width * $1.boundingBox.height }
+            .map { face in
+                let box = face.boundingBox
+                // Vision: normalized, bottom-left origin → UIKit: top-left origin
+                return CGRect(x: box.minX * W, y: (1 - box.maxY) * H,
+                              width: box.width * W, height: box.height * H)
+            }
     }
 
     private nonisolated static func faceCroppedSquare(_ image: UIImage, faceCenter: CGPoint, side: CGFloat = 512) -> UIImage {
