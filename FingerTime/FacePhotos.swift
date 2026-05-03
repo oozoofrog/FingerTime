@@ -60,20 +60,36 @@ final class FacePhotoStore {
 
     func save(_ image: UIImage, for slot: PhotoSlot) {
         PhotoFlowDebug.info("FacePhotoStore save slot=\(slot.rawValue)")
-        let cropped: UIImage
-        if let center = detectFaceCenter(in: image) {
-            cropped = faceCroppedSquare(image, faceCenter: center)
-        } else {
-            cropped = centerCroppedSquare(image)
+        // Extract orientation on MainActor before crossing concurrency boundary
+        let orientation: CGImagePropertyOrientation = {
+            switch image.imageOrientation {
+            case .up:            return .up
+            case .upMirrored:    return .upMirrored
+            case .down:          return .down
+            case .downMirrored:  return .downMirrored
+            case .left:          return .left
+            case .leftMirrored:  return .leftMirrored
+            case .right:         return .right
+            case .rightMirrored: return .rightMirrored
+            @unknown default:    return .up
+            }
+        }()
+        Task {
+            let cropped: UIImage = await Task.detached(priority: .userInitiated) {
+                if let center = FacePhotoStore.detectFaceCenter(in: image, orientation: orientation) {
+                    return FacePhotoStore.faceCroppedSquare(image, faceCenter: center)
+                }
+                return FacePhotoStore.centerCroppedSquare(image)
+            }.value
+            guard let data = cropped.jpegData(compressionQuality: 0.82) else { return }
+            let dest = self.fileURL(for: slot)
+            do {
+                try data.write(to: dest, options: [.atomic])
+            } catch {
+                PhotoFlowDebug.error("FacePhotoStore save failed slot=\(slot.rawValue) error=\(error.localizedDescription)")
+            }
+            self.images[slot] = cropped
         }
-        guard let data = cropped.jpegData(compressionQuality: 0.82) else { return }
-        let dest = fileURL(for: slot)
-        do {
-            try data.write(to: dest, options: [.atomic])
-        } catch {
-            PhotoFlowDebug.error("FacePhotoStore save failed slot=\(slot.rawValue) error=\(error.localizedDescription)")
-        }
-        images[slot] = cropped
     }
 
     private func loadSavedImages() {
@@ -88,10 +104,10 @@ final class FacePhotoStore {
         directory.appendingPathComponent(slot.fileName)
     }
 
-    private func detectFaceCenter(in image: UIImage) -> CGPoint? {
-        guard let ciImage = CIImage(image: image) else { return nil }
+    private nonisolated static func detectFaceCenter(in image: UIImage, orientation: CGImagePropertyOrientation) -> CGPoint? {
+        guard let cgImage = image.cgImage else { return nil }
         let request = VNDetectFaceRectanglesRequest()
-        let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
+        let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
         try? handler.perform([request])
         guard let face = request.results?
             .max(by: { $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height })
@@ -100,7 +116,7 @@ final class FacePhotoStore {
         return CGPoint(x: box.midX * image.size.width, y: (1 - box.midY) * image.size.height)
     }
 
-    private func faceCroppedSquare(_ image: UIImage, faceCenter: CGPoint, side: CGFloat = 512) -> UIImage {
+    private nonisolated static func faceCroppedSquare(_ image: UIImage, faceCenter: CGPoint, side: CGFloat = 512) -> UIImage {
         guard image.size.width > 0, image.size.height > 0 else { return image }
         let scale = max(side / image.size.width, side / image.size.height)
         let scaledSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
@@ -114,7 +130,7 @@ final class FacePhotoStore {
         }
     }
 
-    private func centerCroppedSquare(_ image: UIImage, side: CGFloat = 512) -> UIImage {
+    private nonisolated static func centerCroppedSquare(_ image: UIImage, side: CGFloat = 512) -> UIImage {
         guard image.size.width > 0, image.size.height > 0 else { return image }
         let scale = max(side / image.size.width, side / image.size.height)
         let scaledSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
