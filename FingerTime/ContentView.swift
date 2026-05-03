@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var photoStore = FacePhotoStore()
 
     @State private var sourceDialogSlot: PhotoSlot?
+    @State private var isDialogPresented = false
     @State private var activeSheet: ActiveSheet?
 
     private enum ActiveSheet: Identifiable {
@@ -54,6 +55,7 @@ struct ContentView: View {
                         onPhotoTap: { slot in
                             PhotoFlowDebug.info("ContentView.onPhotoTap received slot=\(slot.rawValue)")
                             sourceDialogSlot = slot
+                            isDialogPresented = true
                         }
                     )
                 }
@@ -99,7 +101,7 @@ struct ContentView: View {
         }
         .confirmationDialog(
             "얼굴 사진 선택",
-            isPresented: sourceDialogBinding,
+            isPresented: $isDialogPresented,
             presenting: sourceDialogSlot
         ) { slot in
             Button("사진 보관함에서 선택") {
@@ -137,22 +139,8 @@ struct ContentView: View {
         }
     }
 
-    private var sourceDialogBinding: Binding<Bool> {
-        Binding(
-            get: { sourceDialogSlot != nil },
-            set: { isPresented in
-                let slotName = sourceDialogSlot?.rawValue ?? "nil"
-                PhotoFlowDebug.info("confirmationDialog binding set isPresented=\(isPresented) sourceSlot=\(slotName)")
-                if !isPresented {
-                    sourceDialogSlot = nil
-                }
-            }
-        )
-    }
-
     private func presentPhotoPicker(for slot: PhotoSlot) {
         PhotoFlowDebug.info("presentPhotoPicker requested slot=\(slot.rawValue)")
-        sourceDialogSlot = nil
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             PhotoFlowDebug.info("presentPhotoPicker presenting sheet slot=\(slot.rawValue)")
@@ -162,7 +150,6 @@ struct ContentView: View {
 
     private func presentCamera(for slot: PhotoSlot) {
         PhotoFlowDebug.info("presentCamera requested slot=\(slot.rawValue)")
-        sourceDialogSlot = nil
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             PhotoFlowDebug.info("presentCamera presenting sheet slot=\(slot.rawValue)")
@@ -212,6 +199,7 @@ struct ContentView: View {
             ForEach(PhotoSlot.allCases) { slot in
                 Button {
                     sourceDialogSlot = slot
+                    isDialogPresented = true
                 } label: {
                     Label {
                         Text(slot.label)
@@ -246,6 +234,7 @@ struct ContentView: View {
             ForEach(PhotoSlot.allCases.filter { $0 != .center }) { slot in
                 Button {
                     sourceDialogSlot = slot
+                    isDialogPresented = true
                 } label: {
                     Label {
                         Text(slot.label)
@@ -282,6 +271,7 @@ struct ContentView: View {
             ForEach(PhotoSlot.allCases) { slot in
                 Button {
                     sourceDialogSlot = slot
+                    isDialogPresented = true
                 } label: {
                     VStack(spacing: 4) {
                         ZStack {
