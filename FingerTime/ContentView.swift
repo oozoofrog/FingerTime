@@ -7,20 +7,20 @@
 
 import SwiftUI
 import UIKit
+
 struct ContentView: View {
     @State private var clockModel = ClockTimeModel()
     @State private var photoStore = FacePhotoStore()
-
-    @State private var sourceDialogSlot: PhotoSlot?
-    @State private var isDialogPresented = false
     @State private var activeSheet: ActiveSheet?
 
     private enum ActiveSheet: Identifiable {
+        case sourceDialog(PhotoSlot)
         case photoPicker(PhotoSlot)
         case camera(PhotoSlot)
 
         var id: String {
             switch self {
+            case .sourceDialog(let slot): "dialog-\(slot.rawValue)"
             case .photoPicker(let slot): "photos-\(slot.rawValue)"
             case .camera(let slot): "camera-\(slot.rawValue)"
             }
@@ -53,9 +53,7 @@ struct ContentView: View {
                             clockModel.applyDragDelta(delta, to: hand)
                         },
                         onPhotoTap: { slot in
-                            PhotoFlowDebug.info("ContentView.onPhotoTap received slot=\(slot.rawValue)")
-                            sourceDialogSlot = slot
-                            isDialogPresented = true
+                            activeSheet = .sourceDialog(slot)
                         }
                     )
                 }
@@ -99,26 +97,23 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
-        .confirmationDialog("얼굴 사진 선택", isPresented: $isDialogPresented, titleVisibility: .visible) {
-            Button("사진 보관함에서 선택") {
-                if let slot = sourceDialogSlot { presentPhotoPicker(for: slot) }
-            }
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("카메라로 찍기") {
-                    if let slot = sourceDialogSlot { presentCamera(for: slot) }
-                }
-            }
-            Button("취소", role: .cancel) {}
-        } message: {
-            if let slot = sourceDialogSlot {
-                Text("\(slot.label) 위치에 넣을 사진을 선택하세요.")
-            }
-        }
-        .onChange(of: sourceDialogSlot) { _, newSlot in
-            PhotoFlowDebug.info("sourceDialogSlot changed to \(newSlot?.rawValue ?? "nil")")
-        }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
+            case .sourceDialog(let slot):
+                PhotoSourceSheet(slot: slot) {
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 400_000_000)
+                        activeSheet = .photoPicker(slot)
+                    }
+                } onCamera: {
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 400_000_000)
+                        activeSheet = .camera(slot)
+                    }
+                }
+                .presentationDetents([.height(260)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color(red: 0.05, green: 0.05, blue: 0.12))
             case .photoPicker(let slot):
                 CustomPhotoPicker { image in
                     handlePickedImage(image, for: slot)
@@ -129,24 +124,6 @@ struct ContentView: View {
                 }
                 .ignoresSafeArea()
             }
-        }
-    }
-
-    private func presentPhotoPicker(for slot: PhotoSlot) {
-        PhotoFlowDebug.info("presentPhotoPicker requested slot=\(slot.rawValue)")
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            PhotoFlowDebug.info("presentPhotoPicker presenting sheet slot=\(slot.rawValue)")
-            activeSheet = .photoPicker(slot)
-        }
-    }
-
-    private func presentCamera(for slot: PhotoSlot) {
-        PhotoFlowDebug.info("presentCamera requested slot=\(slot.rawValue)")
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            PhotoFlowDebug.info("presentCamera presenting sheet slot=\(slot.rawValue)")
-            activeSheet = .camera(slot)
         }
     }
 
@@ -180,10 +157,7 @@ struct ContentView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(.black.opacity(0.38), in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(.cyan.opacity(0.3), lineWidth: 1)
-        )
+        .overlay(Capsule().stroke(.cyan.opacity(0.3), lineWidth: 1))
         .shadow(color: .black.opacity(0.5), radius: 8, y: 4)
     }
 
@@ -191,29 +165,20 @@ struct ContentView: View {
         Menu {
             ForEach(PhotoSlot.allCases) { slot in
                 Button {
-                    sourceDialogSlot = slot
-                    isDialogPresented = true
+                    activeSheet = .sourceDialog(slot)
                 } label: {
-                    Label {
-                        Text(slot.label)
-                    } icon: {
-                        Text(slot.placeholder)
-                    }
+                    Label { Text(slot.label) } icon: { Text(slot.placeholder) }
                 }
             }
         } label: {
             ZStack {
                 Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [.cyan.opacity(0.9), .purple.opacity(0.7)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                    .fill(LinearGradient(
+                        colors: [.cyan.opacity(0.9), .purple.opacity(0.7)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    ))
                     .shadow(color: .cyan.opacity(0.55), radius: 14)
                     .shadow(color: .black.opacity(0.45), radius: 8, y: 4)
-
                 Image(systemName: "person.crop.circle.badge.plus")
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(.white)
@@ -226,14 +191,9 @@ struct ContentView: View {
         Menu {
             ForEach(PhotoSlot.allCases.filter { $0 != .center }) { slot in
                 Button {
-                    sourceDialogSlot = slot
-                    isDialogPresented = true
+                    activeSheet = .sourceDialog(slot)
                 } label: {
-                    Label {
-                        Text(slot.label)
-                    } icon: {
-                        Text(slot.placeholder)
-                    }
+                    Label { Text(slot.label) } icon: { Text(slot.placeholder) }
                 }
             }
         } label: {
@@ -249,8 +209,7 @@ struct ContentView: View {
             .background(
                 LinearGradient(
                     colors: [.orange.opacity(0.9), .pink.opacity(0.8)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+                    startPoint: .topLeading, endPoint: .bottomTrailing
                 ),
                 in: Capsule()
             )
@@ -263,33 +222,23 @@ struct ContentView: View {
         HStack(spacing: 20) {
             ForEach(PhotoSlot.allCases) { slot in
                 Button {
-                    sourceDialogSlot = slot
-                    isDialogPresented = true
+                    activeSheet = .sourceDialog(slot)
                 } label: {
                     VStack(spacing: 4) {
                         ZStack {
                             Circle()
                                 .fill(.ultraThinMaterial)
-                                .overlay(
-                                    Circle()
-                                        .strokeBorder(.white.opacity(0.6), lineWidth: 2)
-                                )
-
+                                .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 2))
                             if let image = photoStore.image(for: slot) {
                                 Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFill()
+                                    .resizable().scaledToFill()
                                     .clipShape(Circle())
                             } else {
-                                Text(slot.placeholder)
-                                    .font(.system(size: 18))
+                                Text(slot.placeholder).font(.system(size: 18))
                             }
                         }
                         .frame(width: 36, height: 36)
-
-                        Text(slot.label)
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.72))
+                        Text(slot.label).font(.caption2).foregroundStyle(.white.opacity(0.72))
                     }
                 }
                 .buttonStyle(.plain)
@@ -298,22 +247,15 @@ struct ContentView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
         .background(.black.opacity(0.42), in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(.cyan.opacity(0.2), lineWidth: 1)
-        )
+        .overlay(Capsule().stroke(.cyan.opacity(0.2), lineWidth: 1))
     }
 
     private var creditBar: some View {
         HStack(spacing: 10) {
             Image(systemName: "sparkles")
-            Text(clockModel.currentBackground.title)
-                .fontWeight(.bold)
-                .lineLimit(1)
+            Text(clockModel.currentBackground.title).fontWeight(.bold).lineLimit(1)
             Text("· \(clockModel.currentBackground.credit)")
-                .foregroundStyle(.white.opacity(0.72))
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .foregroundStyle(.white.opacity(0.72)).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
         }
         .font(.subheadline)
@@ -322,12 +264,67 @@ struct ContentView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(.black.opacity(0.42), in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(.white.opacity(0.16), lineWidth: 1)
-        )
+        .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 1))
     }
 }
+
+// MARK: - Photo Source Sheet
+
+private struct PhotoSourceSheet: View {
+    let slot: PhotoSlot
+    let onPhotoPicker: () -> Void
+    let onCamera: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("\(slot.label) 위치에 넣을 사진을 선택하세요.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .padding(.bottom, 20)
+
+            VStack(spacing: 10) {
+                sourceButton("사진 보관함에서 선택", systemImage: "photo.on.rectangle.angled", color: .cyan) {
+                    dismiss()
+                    onPhotoPicker()
+                }
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    sourceButton("카메라로 찍기", systemImage: "camera.fill", color: .orange) {
+                        dismiss()
+                        onCamera()
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+
+            Button("취소") { dismiss() }
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func sourceButton(_ title: String, systemImage: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(color.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(color.opacity(0.4), lineWidth: 1))
+                .foregroundStyle(color)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Background Views
 
 private struct SpaceBackgroundView: View {
     let background: NASASpaceBackground
@@ -335,36 +332,23 @@ private struct SpaceBackgroundView: View {
     var body: some View {
         ZStack {
             DeepSpaceFallback()
-
             AsyncImage(url: background.url, transaction: Transaction(animation: .easeInOut(duration: 0.8))) { phase in
                 switch phase {
                 case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .transition(.opacity)
+                    image.resizable().scaledToFill().transition(.opacity)
                 default:
                     DeepSpaceFallback()
                 }
             }
             .ignoresSafeArea()
-
             LinearGradient(
-                colors: [
-                    .black.opacity(0.72),
-                    .black.opacity(0.24),
-                    .black.opacity(0.76)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+                colors: [.black.opacity(0.72), .black.opacity(0.24), .black.opacity(0.76)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
-
             RadialGradient(
                 colors: [.clear, .black.opacity(0.55)],
-                center: .center,
-                startRadius: 180,
-                endRadius: 900
+                center: .center, startRadius: 180, endRadius: 900
             )
             .ignoresSafeArea()
         }
@@ -380,10 +364,8 @@ private struct DeepSpaceFallback: View {
                     Color(red: 0.03, green: 0.06, blue: 0.16),
                     Color(red: 0.01, green: 0.0, blue: 0.06)
                 ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+                startPoint: .topLeading, endPoint: .bottomTrailing
             )
-
             Canvas { context, size in
                 for index in 0..<140 {
                     let x = CGFloat((index * 53) % 997) / 997 * size.width
@@ -399,6 +381,8 @@ private struct DeepSpaceFallback: View {
         .ignoresSafeArea()
     }
 }
+
+// MARK: - Clock Views
 
 private struct ClockFaceView: View {
     var photoStore: FacePhotoStore
@@ -438,13 +422,10 @@ private struct ClockFaceView: View {
 
             FacePhotoButton(slot: .hourHandTip, image: photoStore.image(for: .hourHandTip), size: diameter * 0.092, action: { onPhotoTap(.hourHandTip) })
                 .offset(handTipOffset(degrees: angles.hour, length: handLength * 0.68))
-
             FacePhotoButton(slot: .minuteHandTip, image: photoStore.image(for: .minuteHandTip), size: diameter * 0.088, action: { onPhotoTap(.minuteHandTip) })
                 .offset(handTipOffset(degrees: angles.minute, length: handLength * 0.96))
-
             FacePhotoButton(slot: .secondHandTip, image: photoStore.image(for: .secondHandTip), size: diameter * 0.074, action: { onPhotoTap(.secondHandTip) })
                 .offset(handTipOffset(degrees: angles.second, length: handLength * 1.08))
-
             FacePhotoButton(slot: .center, image: photoStore.image(for: .center), size: diameter * 0.115, action: { onPhotoTap(.center) })
         }
         .frame(width: diameter, height: diameter)
@@ -469,17 +450,12 @@ private struct ClockFaceView: View {
 
     private func handleDrag(location: CGPoint, size: CGSize, angles: ClockAngles) {
         let newAngle = ClockTimeMath.angle(for: location, in: size)
-
         if activeHand == nil {
             activeHand = nearestHand(to: newAngle, angles: angles)
             previousDragAngle = newAngle
             return
         }
-
-        guard let activeHand, let previousDragAngle else {
-            return
-        }
-
+        guard let activeHand, let previousDragAngle else { return }
         let delta = ClockTimeMath.shortestDeltaDegrees(from: previousDragAngle, to: newAngle)
         self.previousDragAngle = newAngle
         onDragDelta(activeHand, delta)
@@ -509,33 +485,17 @@ private struct ClockStaticFace: View, Equatable {
     private var clockShell: some View {
         ZStack {
             Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            .cyan.opacity(0.16),
-                            .black.opacity(0.82),
-                            .black.opacity(0.95)
-                        ],
-                        center: .center,
-                        startRadius: diameter * 0.05,
-                        endRadius: diameter * 0.5
-                    )
-                )
-
-            Circle()
-                .strokeBorder(.cyan.opacity(0.74), lineWidth: diameter * 0.018)
-
-            Circle()
-                .strokeBorder(.purple.opacity(0.35), lineWidth: diameter * 0.034)
-                .blur(radius: 1)
-
-            Circle()
-                .inset(by: diameter * 0.085)
+                .fill(RadialGradient(
+                    colors: [.cyan.opacity(0.16), .black.opacity(0.82), .black.opacity(0.95)],
+                    center: .center,
+                    startRadius: diameter * 0.05,
+                    endRadius: diameter * 0.5
+                ))
+            Circle().strokeBorder(.cyan.opacity(0.74), lineWidth: diameter * 0.018)
+            Circle().strokeBorder(.purple.opacity(0.35), lineWidth: diameter * 0.034).blur(radius: 1)
+            Circle().inset(by: diameter * 0.085)
                 .stroke(.white.opacity(0.13), style: StrokeStyle(lineWidth: 1.5, dash: [5, 8]))
-
-            Circle()
-                .inset(by: diameter * 0.18)
-                .stroke(.cyan.opacity(0.13), lineWidth: 1)
+            Circle().inset(by: diameter * 0.18).stroke(.cyan.opacity(0.13), lineWidth: 1)
         }
     }
 
@@ -544,24 +504,20 @@ private struct ClockStaticFace: View, Equatable {
             let cx = size.width / 2
             let cy = size.height / 2
             let outerRadius = diameter * 0.438
-
             for index in 0..<60 {
                 let isMajor = index.isMultiple(of: 5)
                 let tickW: CGFloat = isMajor ? diameter * 0.008 : diameter * 0.004
                 let tickH: CGFloat = isMajor ? diameter * 0.035 : diameter * 0.018
                 let angleRad = Double(index) * 6 * .pi / 180
-
                 let tx = cx + outerRadius * sin(angleRad)
                 let ty = cy - outerRadius * cos(angleRad)
-
                 var ctx = context
                 ctx.addFilter(.shadow(color: .cyan.opacity(0.45), radius: 4))
                 ctx.translateBy(x: tx, y: ty)
                 ctx.rotate(by: .degrees(Double(index) * 6))
-
                 let rect = CGRect(x: -tickW / 2, y: -tickH / 2, width: tickW, height: tickH)
-                let color: Color = isMajor ? .white.opacity(0.92) : .cyan.opacity(0.55)
-                ctx.fill(Path(roundedRect: rect, cornerRadius: tickW / 2), with: .color(color))
+                ctx.fill(Path(roundedRect: rect, cornerRadius: tickW / 2),
+                         with: .color(isMajor ? .white.opacity(0.92) : .cyan.opacity(0.55)))
             }
         }
         .frame(width: diameter, height: diameter)
@@ -595,13 +551,10 @@ private struct ClockHandStick: View {
 
     var body: some View {
         Capsule()
-            .fill(
-                LinearGradient(
-                    colors: [.white.opacity(0.95), color],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
+            .fill(LinearGradient(
+                colors: [.white.opacity(0.95), color],
+                startPoint: .top, endPoint: .bottom
+            ))
             .frame(width: max(width, 3), height: length)
             .offset(y: -length / 2)
             .shadow(color: glow.opacity(0.9), radius: 14)
