@@ -521,9 +521,7 @@ private struct ClockFaceView: View {
         let handLength = diameter * 0.34
 
         ZStack {
-            clockShell
-            tickMarks
-            clockNumbers
+            ClockStaticFace(diameter: diameter).equatable()
 
             ClockHandLayer(
                 angle: angles.hour,
@@ -583,6 +581,45 @@ private struct ClockFaceView: View {
         .shadow(color: .cyan.opacity(0.22), radius: 40)
     }
 
+    private func handleDrag(location: CGPoint, size: CGSize, angles: ClockAngles) {
+        let newAngle = ClockTimeMath.angle(for: location, in: size)
+
+        if activeHand == nil {
+            activeHand = nearestHand(to: newAngle, angles: angles)
+            previousDragAngle = newAngle
+            return
+        }
+
+        guard let activeHand, let previousDragAngle else {
+            return
+        }
+
+        let delta = ClockTimeMath.shortestDeltaDegrees(from: previousDragAngle, to: newAngle)
+        self.previousDragAngle = newAngle
+        onDragDelta(activeHand, delta)
+    }
+
+    private func nearestHand(to angle: Double, angles: ClockAngles) -> ClockHand {
+        let candidates: [(ClockHand, Double)] = [
+            (.hour, ClockTimeMath.angularDistance(angle, angles.hour)),
+            (.minute, ClockTimeMath.angularDistance(angle, angles.minute)),
+            (.second, ClockTimeMath.angularDistance(angle, angles.second))
+        ]
+        return candidates.min(by: { $0.1 < $1.1 })?.0 ?? .minute
+    }
+}
+
+private struct ClockStaticFace: View, Equatable {
+    let diameter: CGFloat
+
+    var body: some View {
+        ZStack {
+            clockShell
+            tickMarks
+            clockNumbers
+        }
+    }
+
     private var clockShell: some View {
         ZStack {
             Circle()
@@ -617,19 +654,31 @@ private struct ClockFaceView: View {
     }
 
     private var tickMarks: some View {
-        ZStack {
-            ForEach(0..<60, id: \.self) { index in
-                Capsule()
-                    .fill(index.isMultiple(of: 5) ? .white.opacity(0.92) : .cyan.opacity(0.55))
-                    .frame(
-                        width: index.isMultiple(of: 5) ? diameter * 0.008 : diameter * 0.004,
-                        height: index.isMultiple(of: 5) ? diameter * 0.035 : diameter * 0.018
-                    )
-                    .offset(y: -diameter * 0.438)
-                    .rotationEffect(.degrees(Double(index) * 6))
-                    .shadow(color: .cyan.opacity(0.45), radius: 4)
+        Canvas { context, size in
+            let cx = size.width / 2
+            let cy = size.height / 2
+            let outerRadius = diameter * 0.438
+
+            for index in 0..<60 {
+                let isMajor = index.isMultiple(of: 5)
+                let tickW: CGFloat = isMajor ? diameter * 0.008 : diameter * 0.004
+                let tickH: CGFloat = isMajor ? diameter * 0.035 : diameter * 0.018
+                let angleRad = Double(index) * 6 * .pi / 180
+
+                let tx = cx + outerRadius * sin(angleRad)
+                let ty = cy - outerRadius * cos(angleRad)
+
+                var ctx = context
+                ctx.addFilter(.shadow(color: .cyan.opacity(0.45), radius: 4))
+                ctx.translateBy(x: tx, y: ty)
+                ctx.rotate(by: .degrees(Double(index) * 6))
+
+                let rect = CGRect(x: -tickW / 2, y: -tickH / 2, width: tickW, height: tickH)
+                let color: Color = isMajor ? .white.opacity(0.92) : .cyan.opacity(0.55)
+                ctx.fill(Path(roundedRect: rect, cornerRadius: tickW / 2), with: .color(color))
             }
         }
+        .frame(width: diameter, height: diameter)
     }
 
     private var clockNumbers: some View {
@@ -648,33 +697,6 @@ private struct ClockFaceView: View {
             .shadow(color: .cyan, radius: 10)
             .shadow(color: .blue.opacity(0.8), radius: 22)
             .offset(x: x, y: y)
-    }
-
-    private func handleDrag(location: CGPoint, size: CGSize, angles: ClockAngles) {
-        let newAngle = ClockTimeMath.angle(for: location, in: size)
-
-        if activeHand == nil {
-            activeHand = nearestHand(to: newAngle, angles: angles)
-            previousDragAngle = newAngle
-            return
-        }
-
-        guard let activeHand, let previousDragAngle else {
-            return
-        }
-
-        let delta = ClockTimeMath.shortestDeltaDegrees(from: previousDragAngle, to: newAngle)
-        self.previousDragAngle = newAngle
-        onDragDelta(activeHand, delta)
-    }
-
-    private func nearestHand(to angle: Double, angles: ClockAngles) -> ClockHand {
-        let candidates: [(ClockHand, Double)] = [
-            (.hour, ClockTimeMath.angularDistance(angle, angles.hour)),
-            (.minute, ClockTimeMath.angularDistance(angle, angles.minute)),
-            (.second, ClockTimeMath.angularDistance(angle, angles.second))
-        ]
-        return candidates.min(by: { $0.1 < $1.1 })?.0 ?? .minute
     }
 }
 
